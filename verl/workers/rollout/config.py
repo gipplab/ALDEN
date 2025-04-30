@@ -26,6 +26,8 @@ class RolloutConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     top_k: int = -1
+    top_n: int = 1
+    search_url: str = 'http://127.0.0.1:42354'
     seed: int = 1
     limit_images: int = 0
     dtype: str = "bf16"

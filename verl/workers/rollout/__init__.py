@@ -14,7 +14,7 @@
 
 
 from .config import RolloutConfig
-from .vllm_rollout_spmd import vLLMRollout
+from .vllm_rollout_spmd import vLLMRollout, vLLMRolloutAgent
 
 
-__all__ = ["RolloutConfig", "vLLMRollout"]
+__all__ = ["RolloutConfig", "vLLMRollout", "vLLMRolloutAgent"]

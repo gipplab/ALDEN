@@ -55,9 +55,10 @@ from ..utils.tokenizer import get_processor, get_tokenizer
 from ..utils.torch_dtypes import PrecisionType
 from ..utils.torch_functional import AnyPrecisionAdamW, get_constant_schedule_with_warmup
 from .config import ActorConfig, CriticConfig, FSDPConfig, ModelConfig, OptimConfig, RefConfig, WorkerConfig
-from .rollout import vLLMRollout
+from .rollout import vLLMRollout, vLLMRolloutAgent
 from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
+import pydevd_pycharm
 
 
 class FSDPWorker(Worker):
@@ -312,11 +313,20 @@ class FSDPWorker(Worker):
             f"rollout world size: {self.world_size} is not divisible by tp size: {tp_size}"
         )
         rollout_device_mesh = init_device_mesh("cuda", mesh_shape=(dp_size, tp_size), mesh_dim_names=("dp", "tp"))
-        self.rollout = vLLMRollout(
-            model_path=self.config.actor.model.model_path,
-            config=self.config.rollout,
-            tokenizer=self.tokenizer,
-        )
+        rollout_name = self.config.rollout.name
+        if rollout_name == 'vllm':
+            self.rollout = vLLMRollout(
+                model_path=self.config.actor.model.model_path,
+                config=self.config.rollout,
+                tokenizer=self.tokenizer,
+            )
+        elif rollout_name == 'vllm_agent':
+            self.rollout = vLLMRolloutAgent(
+                model_path=self.config.actor.model.model_path,
+                config=self.config.rollout,
+                tokenizer=self.tokenizer,
+                processor=self.processor
+            )
         self.rollout_sharding_manager = FSDPVLLMShardingManager(
             module=self.fsdp_module,
             inference_engine=self.rollout.inference_engine,
@@ -438,7 +448,7 @@ class FSDPWorker(Worker):
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
             with Timer(name="update_policy", logger=None) as timer:
-                metrics = self.actor.update_policy(data=data)
+                metrics = self.actor.update_policy(data=data, processor=self.processor)
 
             delta_time = timer.last
             global_num_tokens = data.meta_info["global_token_num"]
@@ -517,7 +527,7 @@ class FSDPWorker(Worker):
         # perform recompute log_prob
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            output = self.actor.compute_log_prob(data=data)
+            output = self.actor.compute_log_prob(data=data, processor=self.processor)
             output = DataProto.from_dict(
                 tensors={"old_log_probs": output}, meta_info={"temperature": self.config.rollout.temperature}
             )
@@ -544,7 +554,7 @@ class FSDPWorker(Worker):
         data.meta_info["temperature"] = self.config.rollout.temperature
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            output = self.ref_policy.compute_log_prob(data=data)
+            output = self.ref_policy.compute_log_prob(data=data, processor=self.processor)
             output = DataProto.from_dict(tensors={"ref_log_probs": output})
             output = self.ulysses_sharding_manager.postprocess_data(output)
 

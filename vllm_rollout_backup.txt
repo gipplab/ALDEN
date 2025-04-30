@@ -39,7 +39,6 @@ from io import BytesIO
 from copy import deepcopy
 from ...models.transformers.qwen2_vl import get_rope_index
 from ...utils.dataset import ImageProcessMixin
-import io
 import pydevd_pycharm
 
 
@@ -57,12 +56,6 @@ def _get_logit_bias(model_path: str, trust_remote_code: bool) -> Optional[Dict[i
         return {image_token_id: -100}
     else:
         return None
-
-def image_to_bytes(image):
-    """将Image列的PIL图片转换为字节"""
-    with io.BytesIO() as buffer:
-        image.save(buffer, format="JPEG")  # 可根据需要选择格式
-        return buffer.getvalue()
 
 
 class vLLMRollout(BaseRollout):
@@ -233,12 +226,11 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
         self.image_token_id = tokenizer.encode(processor.image_token)[0]
         self.image_start_id = tokenizer.encode("<|vision_start|>")[0]
         self.image_end_id = tokenizer.encode("<|vision_end|>")[0]
-        self.result_prefix_ids = self.tokenizer.encode("<|im_start|>user\n<result>")
-        self.result_suffix_ids = self.tokenizer.encode("</result><|im_end|>\n<|im_start|>assistant\n")
+        self.result_prefix_ids = self.tokenizer.encode("<result>")
+        self.result_suffix_ids = self.tokenizer.encode("</result>")
         self.top_n = config.top_n
         self.max_pixels = 4194304
         self.min_pixels = 262144
-        self.vllm_image_limit = 15
 
     @retry(max=5, sleep=1)
     def batch_search(self, query: Union[str, List[str]], doc_ids: Union[str, List[str]], top_n=5):
@@ -399,8 +391,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
             # collect the results
             result_ids_list = [[] for _ in range(len(curr_inputs))]
 
-            result_attention_mask = [[] for _ in range(len(curr_inputs))]
-
             # collect the gotten page number
             page_numbers_list = [{'N.O': []} for _ in range(len(curr_inputs))]
 
@@ -419,6 +409,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         sampling_params=self.sampling_params,
                         use_tqdm=False
                     )
+                pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
                 search_queries = []
                 search_indices = []
                 search_doc_ids = []
@@ -431,43 +422,66 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 outputs = [output for completion in completions for output in completion.outputs]
                 for i, idx in enumerate(active_indices):
                     output_ids = outputs[i].token_ids
+                    if self.tokenizer.eos_token_id in output_ids:
+                        first_eos_idx = output_ids.index(self.tokenizer.eos_token_id)
+                    else:
+                        first_eos_idx = len(output_ids)
+
+                    if self.tokenizer.pad_token_id in output_ids:
+                        first_pad_idx = output_ids.index(self.tokenizer.pad_token_id)
+                    else:
+                        first_pad_idx = len(output_ids)
 
                     finish_reason = outputs[i].finish_reason
                     stop_reason = outputs[i].stop_reason
 
-                    if finish_reason == 'stop' and stop_reason == None:
-                        if outputs[i].text.endswith('</search>'):
-                            search_content = self.extract_search_content(outputs[i].text)
-                            search_queries.append(search_content)
-                            search_indices.append(idx)
-                            search_doc_ids.append(doc_ids[idx])
-                            new_active_indices.append(idx)
-                            ## update the current input
-                            curr_inputs[idx]['prompt_token_ids'] += output_ids
-                            result_mask_list[idx] += [1] * len(output_ids)
-                            result_ids_list[idx] += output_ids
-                            result_attention_mask[idx] += [1] * len(output_ids)
-                        elif outputs[i].text.endswith('</fetch>'):
-                            fetch_content = self.extract_fetch_content(outputs[i].text)
-                            fetch_queries.append(fetch_content)
-                            fetch_indices.append(idx)
-                            fetch_doc_ids.append(doc_ids[idx])
-                            new_active_indices.append(idx)
-                            ## update the current input
-                            curr_inputs[idx]['prompt_token_ids'] += output_ids
-                            result_mask_list[idx] += [1] * len(output_ids)
-                            result_ids_list[idx] += output_ids
-                            result_attention_mask[idx] += [1] * len(output_ids)
-                        else:
-                            curr_inputs[idx]['prompt_token_ids'] += output_ids
-                            result_mask_list[idx] += [1] * len(output_ids)
-                            result_ids_list[idx] += output_ids
-                            result_attention_mask[idx] += [1] * len(output_ids)
-                    else:
+                    if finish_reason == 'stop' and isinstance(stop_reason, str) and '</search>' in stop_reason:
+                        # need to search
+                        ## truncate from the first pad token
+                        output_ids = output_ids[:first_pad_idx]
+                        output_str = self.tokenizer.decode(output_ids)
+                        ## process the search
+                        search_content = self.extract_search_content(output_str)
+                        search_queries.append(search_content)
+                        search_indices.append(idx)
+                        search_doc_ids.append(doc_ids[idx])
+                        new_active_indices.append(idx)
+                        ## update the current input
                         curr_inputs[idx]['prompt_token_ids'] += output_ids
                         result_mask_list[idx] += [1] * len(output_ids)
                         result_ids_list[idx] += output_ids
-                        result_attention_mask[idx] += [1] * len(output_ids)
+                    elif finish_reason == 'stop' and isinstance(stop_reason, str) and '</fetch>' in stop_reason:
+                        # need to fetch
+                        ## truncate from the first pad token
+                        output_ids = output_ids[:first_pad_idx]
+                        output_str = self.tokenizer.decode(output_ids)
+                        ## process the search
+                        fetch_content = self.extract_fetch_content(output_str)
+                        fetch_queries.append(fetch_content)
+                        fetch_indices.append(idx)
+                        fetch_doc_ids.append(doc_ids[idx])
+                        new_active_indices.append(idx)
+                        ## update the current input
+                        curr_inputs[idx]['prompt_token_ids'] += output_ids
+                        result_mask_list[idx] += [1] * len(output_ids)
+                        result_ids_list[idx] += output_ids
+                    elif finish_reason == 'stop' and stop_reason == None:
+                        # output eos, indicating finished; truncate from the first eos token
+                        output_ids = output_ids[:first_eos_idx+1]
+                        curr_inputs[idx]['prompt_token_ids'] += output_ids
+                        result_mask_list[idx] += [1] * len(output_ids)
+                        result_ids_list[idx] += output_ids
+                    elif finish_reason == 'stop' and stop_reason == self.tokenizer.pad_token_id:
+                        # for instruction model, there is a chance that the end is endoftext, not im_end, this case needs special handling
+                        output_ids = output_ids[:first_pad_idx+1]
+                        curr_inputs[idx]['prompt_token_ids'] += output_ids
+                        result_mask_list[idx] += [1] * len(output_ids)
+                        result_ids_list[idx] += output_ids
+                    elif finish_reason == 'length':
+                        # output is too long
+                        curr_inputs[idx]['prompt_token_ids'] += output_ids
+                        result_mask_list[idx] += [1] * len(output_ids)
+                        result_ids_list[idx] += output_ids
 
                 # batch process the search requests
                 almost_full_indices = []
@@ -481,9 +495,8 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids)
                         result_mask_list[idx] += [0] * len(self.result_prefix_ids)
                         result_ids_list[idx] += self.result_prefix_ids
-                        result_attention_mask[idx] += [1] * len(self.result_prefix_ids)
                         while top_ki < self.top_n:
-                            if len(result_mask_list[idx]) + (image_inputs['image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
+                            if len(result_mask_list[idx]) + (image_inputs['image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + 2 < self.config.response_length:
                                 result_image_list[idx]['data'].append(result_str[top_ki])
                                 page_numbers_list[idx]['N.O'].append(p_id[top_ki])
                                 if 'multi_modal_data' not in curr_inputs[idx].keys():
@@ -492,8 +505,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                                 curr_inputs[idx]['prompt_token_ids'].extend([self.image_start_id, self.image_token_id, self.image_end_id])
                                 result_mask_list[idx] += [0] * (image_inputs[
                                                                     'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2
-                                result_attention_mask[idx] += [1] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [1] * 2
                                 result_ids_list[idx] += [self.image_start_id] + [self.image_token_id] * (image_inputs[
                                                                     'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [self.image_end_id]
                             else:
@@ -502,7 +513,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             top_ki += 1
                         curr_inputs[idx]['prompt_token_ids'].extend(self.result_suffix_ids)
                         result_mask_list[idx] += [0] * len(self.result_suffix_ids)
-                        result_attention_mask[idx] += [1] * len(self.result_suffix_ids)
                         result_ids_list[idx] += self.result_suffix_ids
 
                 if fetch_queries:
@@ -512,7 +522,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         if not isinstance(result[0], str):
                             processed_result = [self.process_image(image) for image in result]
                             image_inputs = self.processor.image_processor(processed_result, return_tensors='pt')
-                            if len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
+                            if len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2 < self.config.response_length:
                                 result_image_list[idx]['data'].append(result_str[0])
                                 page_numbers_list[idx]['N.O'].append(p_id[0])
                                 if 'multi_modal_data' not in curr_inputs[idx].keys():
@@ -521,8 +531,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                                 curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids + [self.image_start_id, self.image_token_id, self.image_end_id] + self.result_suffix_ids)
                                 result_mask_list[idx] += [0] * (image_inputs[
                                                                     'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
-                                result_attention_mask[idx] += [1] * (image_inputs[
-                                                                    'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
                                 result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [self.image_token_id] * (image_inputs[
                                                                     'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [self.image_end_id] + self.result_suffix_ids
                             else:
@@ -531,7 +539,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             fetch_err_msg = self.tokenizer.encode(result[0])
                             curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids + fetch_err_msg + self.result_suffix_ids)
                             result_mask_list[idx] += [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + len(fetch_err_msg))
-                            result_attention_mask[idx] += [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + len(fetch_err_msg))
                             result_ids_list[idx] += self.result_prefix_ids + fetch_err_msg + self.result_suffix_ids
                             # check if need to truncate for active indices
                 length_checked_active_indices = []
@@ -539,62 +546,12 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                     assert len(result_ids_list[idx]) == len(result_mask_list[idx]), f"result_ids_list: {len(result_ids_list)}, result_mask_list: {len(result_mask_list[idx])}"
                     if len(result_mask_list[idx]) >= self.config.response_length:
                         result_mask_list[idx] = result_mask_list[idx][:self.config.response_length]
-                        result_attention_mask[idx] = result_attention_mask[idx][:self.config.response_length]
                         result_ids_list[idx] = result_ids_list[idx][:self.config.response_length]
                     else:
-                        curr_max_tokens[idx] = self.config.response_length - len(result_ids_list[idx])
+                        curr_max_tokens[idx] = self.config.response_length - len(result_ids_list)
                         if idx in new_active_indices and idx not in almost_full_indices:
                             length_checked_active_indices.append(idx)
                 active_indices = length_checked_active_indices
-
-            padding_indices = []
-            for ai in range(len(curr_inputs)):
-                if len(result_image_list[ai]['data']) == 0:
-                    padding_indices.append(ai)
-            if len(padding_indices) > 0:
-                padding_results = [[Image.open('/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/assets/padding_image.jpg')]] * len(padding_indices)
-                padding_results_str = [[base64.b64encode(image_to_bytes(padding_results[0][0])).decode("utf-8")]] * len(padding_indices)
-                padding_page_ids = [['0']] * len(padding_indices)
-                for idx, result, p_id, result_str in zip(padding_indices, padding_results, padding_page_ids, padding_results_str):
-                    processed_result = [self.process_image(image) for image in result]
-                    image_inputs = self.processor.image_processor(processed_result, return_tensors='pt')
-                    padding_img_len = len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][
-                                                                       0].prod() // self.processor.image_processor.merge_size ** 2) + len(
-                        self.result_prefix_ids) + len(self.result_suffix_ids) + 2
-                    result_image_list[idx]['data'].append(result_str[0])
-                    page_numbers_list[idx]['N.O'].append(p_id[0])
-                    if 'multi_modal_data' not in curr_inputs[idx].keys():
-                        curr_inputs[idx]['multi_modal_data'] = {'image': []}
-                    curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[0])
-                    ext_len = len(result_ids_list[idx])
-                    if ext_len + padding_img_len > self.config.response_length:
-                        t = self.config.response_length - padding_img_len
-                        result_mask_list[idx] = result_mask_list[idx][:t]
-                        result_attention_mask[idx] = result_attention_mask[idx][:t]
-                        result_ids_list[idx] = result_ids_list[idx][:t]
-                    result_mask_list[idx] += [0] * (image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
-                                                 0] * (len(self.result_prefix_ids) + len(
-                        self.result_suffix_ids) + 2)
-                    result_attention_mask[idx] += [1] * (image_inputs[
-                                                             'image_grid_thw'][
-                                                             0].prod() // self.processor.image_processor.merge_size ** 2) + [
-                                                      1] * (len(self.result_prefix_ids) + len(
-                        self.result_suffix_ids) + 2)
-                    result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [
-                        self.image_token_id] * (
-                                                    image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
-                                                self.image_end_id] + self.result_suffix_ids
-
-                    # result_ids_list[ai] = []
-                    # result_mask_list[ai] = []
-                    # result_attention_mask[ai] = []
-                    # curr_inputs[ai] = deepcopy(original_inputs[ai])
-                    # active_indices += [ai]
-                    # curr_max_tokens[idx] = self.config.response_length
 
             # output_ids_list = []
             # # collect the results
@@ -602,7 +559,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
             #     for j in range(self.sampling_params.n):
             #         idx = i * self.sampling_params.n + j
             #         output_ids_list.append(result_ids_list[idx])
-
             response_ids = VF.pad_2d_list_to_length(
                 result_ids_list, self.pad_token_id, max_length=self.config.response_length
             ).to(input_ids.device)
@@ -622,9 +578,9 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
 
         sequence_ids = torch.cat([input_ids, response_ids], dim=-1)
         # response_length = response_ids.size(1)
-        response_mask = VF.pad_2d_list_to_length(
-                result_attention_mask, 0, max_length=self.config.response_length
-            ).to(input_ids.device)
+        response_mask = VF.get_response_mask(
+            response_ids=response_ids, eos_token_id=eos_token_id, dtype=attention_mask.dtype
+        )
         delta_position_id = []
         for i, input in enumerate(curr_inputs):
             if 'multi_modal_data' in input.keys():

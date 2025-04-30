@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=EasyR1-qwen2p5VL-7b-DocAgent
-#SBATCH --nodes=2
+#SBATCH --nodes=8
 #SBATCH --mem=450G
 #SBATCH --mail-user=tianyu.yang@uni-goettingen.de
 #SBATCH --mail-type=all
@@ -13,11 +13,33 @@
 #############module load cuda/12.2.1
 ############SBATCH --constraint=80gb
 ################SBATCH --mem=500G
-set -x
 
-MODEL_PATH=Qwen/Qwen2.5-VL-3B-Instruct  # replace it with your local file path
+set -x
+#export VLLM_ATTENTION_BACKEND=XFORMERS
+
+MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct  # replace it with your local file path
 WANDB_API_KEY=a3b3f7b7962a8b549c4635ee3a03944d554f1a10
+ROLLOUT_NAME=vllm_agent
+SEARCH_TOP_N=1
+SEARCH_URL=http://10.241.148.35:42354
+LIMIT_IMAGES=15
+MAX_RESPONSE_LENGTH=11264
+MAX_PROMPT_LENGTH=720
+ROLLOUT_MAX_NUM_BATCHED_TOKENS=13824
+TENSOR_PARALLEL_SIZE=2
 PROJECT_NAME=EasyR1
+EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_test
+PROMPT_KEY=question
+ROLLOUT_BATCH_SIZE=128
+ROLLOUT_N=5
+VAL_BATCH_SIZE=-1
+GLOBAL_BATCH_SIZE=128
+MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE=2
+MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE=10
+TRAIN_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/train.parquet  # your train data path here
+DEV_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/val_512.parquet
+CONFIG_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/examples/config.yaml
+SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent_test
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY
@@ -75,14 +97,30 @@ done
 srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
   "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1  \
   && python -m verl.trainer.main \
-    config=examples/config.yaml \
-    data.train_files=leonardPKU/GEOQA_8K_R1V@train \
-    data.val_files=leonardPKU/GEOQA_8K_R1V@test \
-    data.format_prompt=./examples/format_prompt/r1v_format.jinja \
+    config=${CONFIG_PATH} \
+    data.train_files=${TRAIN_DATA_PATH} \
+    data.val_files=${DEV_DATA_PATH} \
+    data.prompt_key=${PROMPT_KEY} \
+    data.format_prompt=./examples/format_prompt/doc_agent.py \
+    data.max_response_length=${MAX_RESPONSE_LENGTH} \
+    data.max_prompt_length=${MAX_PROMPT_LENGTH} \
+    data.rollout_batch_size=${ROLLOUT_BATCH_SIZE} \
+    data.val_batch_size=${VAL_BATCH_SIZE} \
     worker.actor.model.model_path=${MODEL_PATH} \
-    worker.rollout.tensor_parallel_size=1 \
-    worker.reward.score_function=./examples/score_function/r1v.py:compute_score \
+    worker.actor.global_batch_size=${GLOBAL_BATCH_SIZE} \
+    worker.actor.micro_batch_size_per_device_for_update=${MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE} \
+    worker.actor.micro_batch_size_per_device_for_experience=${MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE} \
+    worker.rollout.tensor_parallel_size=${TENSOR_PARALLEL_SIZE} \
+    worker.rollout.name=${ROLLOUT_NAME} \
+    worker.rollout.n=${ROLLOUT_N} \
+    worker.rollout.max_num_batched_tokens=${ROLLOUT_MAX_NUM_BATCHED_TOKENS} \
+    worker.rollout.top_n=${SEARCH_TOP_N} \
+    worker.rollout.search_url=${SEARCH_URL} \
+    worker.rollout.limit_images=${LIMIT_IMAGES} \
+    worker.reward.score_function=./examples/score_function/doc_agent.py:compute_score \
     trainer.project_name=${PROJECT_NAME} \
-    trainer.experiment_name=qwen2_5_vl_3b_geoqa8k \
+    trainer.experiment_name=${EXPERIMENT_NAME} \
     trainer.n_gpus_per_node=${SLURM_GPUS_PER_NODE} \
     trainer.nnodes=${SLURM_NNODES}"
+#    trainer.save_checkpoint_path=${SAVE_PATH}
+#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent/global_step_160"

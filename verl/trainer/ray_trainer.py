@@ -293,10 +293,16 @@ class RayPPOTrainer:
             sample_inputs.extend(input_texts)
 
             if "multi_modal_data" in test_batch.non_tensor_batch.keys():
-                test_gen_batch = test_batch.pop(
-                    batch_keys=["input_ids", "attention_mask", "position_ids"],
-                    non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                )
+                if "doc_id" in test_batch.non_tensor_batch.keys():
+                    test_gen_batch = test_batch.pop(
+                        batch_keys=["input_ids", "attention_mask", "position_ids"],
+                        non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data", "doc_id"],
+                    )
+                else:
+                    test_gen_batch = test_batch.pop(
+                        batch_keys=["input_ids", "attention_mask", "position_ids"],
+                        non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+                    )
             else:
                 test_gen_batch = test_batch.pop(
                     batch_keys=["input_ids", "attention_mask", "position_ids"],
@@ -494,10 +500,16 @@ class RayPPOTrainer:
 
                 # pop those keys for generation
                 if "multi_modal_data" in batch.non_tensor_batch.keys():
-                    gen_batch = batch.pop(
-                        batch_keys=["input_ids", "attention_mask", "position_ids"],
-                        non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                    )
+                    if "doc_id" in batch.non_tensor_batch.keys():
+                        gen_batch = batch.pop(
+                            batch_keys=["input_ids", "attention_mask", "position_ids"],
+                            non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data", "doc_id"],
+                        )
+                    else:
+                        gen_batch = batch.pop(
+                            batch_keys=["input_ids", "attention_mask", "position_ids"],
+                            non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+                        )
                 else:
                     gen_batch = batch.pop(
                         batch_keys=["input_ids", "attention_mask", "position_ids"],
@@ -530,7 +542,7 @@ class RayPPOTrainer:
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
-                    batch.non_tensor_batch.pop("multi_modal_data", None)
+                    # batch.non_tensor_batch.pop("multi_modal_data", None)
 
                     # compute reward
                     with _timer("reward", timing_raw):
