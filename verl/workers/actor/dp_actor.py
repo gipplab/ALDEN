@@ -25,6 +25,11 @@ from ray.experimental.tqdm_ray import tqdm
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers.modeling_flash_attention_utils import index_first_axis, pad_input, unpad_input
+from PIL import Image
+import base64
+from io import BytesIO
+import numpy as np
+import pydevd_pycharm
 
 from ...protocol import DataProto
 from ...trainer import core_algos
@@ -33,12 +38,13 @@ from ...utils.py_functional import append_to_dict
 from ...utils.ulysses import gather_outputs_and_unpad, ulysses_pad_and_slice_inputs
 from .base import BasePPOActor
 from .config import ActorConfig
+from ...utils.dataset import ImageProcessMixin
 
 
 __all__ = ["DataParallelPPOActor"]
 
 
-class DataParallelPPOActor(BasePPOActor):
+class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
     def __init__(
         self,
         config: ActorConfig,
@@ -52,6 +58,8 @@ class DataParallelPPOActor(BasePPOActor):
         self.rank = int(os.getenv("RANK", "0"))
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
+        self.max_pixels = 4194304
+        self.min_pixels = 262144
         if config.use_torch_compile:
             self.log_probs_from_logits = torch.compile(VF.log_probs_from_logits, dynamic=True)
         else:
@@ -77,6 +85,9 @@ class DataParallelPPOActor(BasePPOActor):
                 multi_modal_inputs[key] = torch.cat(
                     [inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0
                 )
+                if multi_modal_inputs[key].size() == torch.Size([0]):
+                    multi_modal_inputs = {}
+                    break
 
         if self.config.padding_free:
             input_ids_rmpad, indices, *_ = unpad_input(
@@ -163,7 +174,7 @@ class DataParallelPPOActor(BasePPOActor):
         return grad_norm
 
     @torch.no_grad()
-    def compute_log_prob(self, data: DataProto) -> torch.Tensor:
+    def compute_log_prob(self, data: DataProto, processor=None) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
         Args:
@@ -186,6 +197,18 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
+            if 'doc_id' in data.non_tensor_batch.keys():
+                mm_inputs = []
+                for result_strs in data.non_tensor_batch['multi_modal_data']:
+                    if len(result_strs['data']) > 0:
+                        img_data = [self.process_image(Image.open(BytesIO(base64.urlsafe_b64decode(result_str)))) for
+                                    result_str in result_strs['data']]
+                        img_input = dict(processor.image_processor(img_data, return_tensors='pt'))
+                    else:
+                        img_input = {'pixel_values': torch.tensor([], dtype=torch.float32),
+                                     'image_grid_thw': torch.tensor([], dtype=torch.int64)}
+                    mm_inputs.append(img_input)
+                data.non_tensor_batch['multi_modal_inputs'] = np.array(mm_inputs, object)
             non_tensor_select_keys = ["multi_modal_inputs"]
         else:
             non_tensor_select_keys = []
@@ -194,8 +217,8 @@ class DataParallelPPOActor(BasePPOActor):
             self.config.micro_batch_size_per_device_for_experience
         )
         log_probs_lst = []
-        if self.rank == 0:
-            micro_batches = tqdm(micro_batches, desc="Compute log probs", position=2)
+        # if self.rank == 0:
+        #     micro_batches = tqdm(micro_batches, desc="Compute log probs", position=2)
 
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
@@ -205,15 +228,29 @@ class DataParallelPPOActor(BasePPOActor):
         log_probs = torch.concat(log_probs_lst, dim=0)
         return log_probs
 
-    def update_policy(self, data: DataProto) -> Dict[str, Any]:
+    def update_policy(self, data: DataProto, processor=None) -> Dict[str, Any]:
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
+        if 'loss_mask' in data.batch:
+            select_keys.append('loss_mask')
 
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
+            if 'doc_id' in data.non_tensor_batch.keys():
+                mm_inputs = []
+                for result_strs in data.non_tensor_batch['multi_modal_data']:
+                    if len(result_strs['data']) > 0:
+                        img_data = [self.process_image(Image.open(BytesIO(base64.urlsafe_b64decode(result_str)))) for
+                                    result_str in result_strs['data']]
+                        img_input = dict(processor.image_processor(img_data, return_tensors='pt'))
+                    else:
+                        img_input = {'pixel_values': torch.tensor([], dtype=torch.float32),
+                                     'image_grid_thw': torch.tensor([], dtype=torch.int64)}
+                    mm_inputs.append(img_input)
+                data.non_tensor_batch['multi_modal_inputs'] = np.array(mm_inputs, object)
             non_tensor_select_keys = ["multi_modal_inputs"]
         else:
             non_tensor_select_keys = []
@@ -224,16 +261,16 @@ class DataParallelPPOActor(BasePPOActor):
 
         metrics = defaultdict(list)
         for _ in range(self.config.ppo_epochs):
-            if self.rank == 0:
-                mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
+            # if self.rank == 0:
+            #     mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
 
             for mini_batch in mini_batches:
                 gradient_accumulation = (
                     self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update
                 )
                 micro_batches = mini_batch.split(self.config.micro_batch_size_per_device_for_update)
-                if self.rank == 0:
-                    micro_batches = tqdm(micro_batches, desc="Update policy", position=3)
+                # if self.rank == 0:
+                #     micro_batches = tqdm(micro_batches, desc="Update policy", position=3)
 
                 for micro_batch in micro_batches:
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
@@ -241,6 +278,8 @@ class DataParallelPPOActor(BasePPOActor):
                     response_length = responses.size(1)
                     attention_mask = model_inputs["attention_mask"]
                     response_mask = attention_mask[:, -response_length:]
+                    if 'loss_mask' in data:
+                        response_mask = data['loss_mask']
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
 

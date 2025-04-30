@@ -123,8 +123,12 @@ class RLHFDataset(Dataset, ImageProcessMixin):
 
         self.format_prompt = None
         if format_prompt:
-            with open(format_prompt, encoding="utf-8") as f:
-                self.format_prompt = f.read()
+            if format_prompt.endswith('py'):
+                from examples.format_prompt.doc_agent import system_prompt
+                self.format_prompt = system_prompt
+            else:
+                with open(format_prompt, encoding="utf-8") as f:
+                    self.format_prompt = f.read()
 
         if self.filter_overlong_prompts:
             self.dataset = self.dataset.filter(self._filter_overlong_prompts, desc="Filtering overlong prompts")
@@ -132,8 +136,14 @@ class RLHFDataset(Dataset, ImageProcessMixin):
     def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
         prompt_str: str = example[self.prompt_key]
         if self.format_prompt:
-            format_prompt = Template(self.format_prompt.strip())
-            prompt_str = format_prompt.render(content=prompt_str)
+            if 'doc_id' in example.keys():
+                format_prompt = self.format_prompt.strip()
+                prompt_str = "I have a {}-page document. My question is: ".format(example['doc_length']) + prompt_str
+            else:
+                format_prompt = Template(self.format_prompt.strip())
+                prompt_str = format_prompt.render(content=prompt_str)
+        else:
+            format_prompt = "You are a helpful agent."
 
         if self.image_key in example:
             # https://huggingface.co/docs/transformers/en/tasks/image_text_to_text
@@ -144,14 +154,19 @@ class RLHFDataset(Dataset, ImageProcessMixin):
 
                 if content:
                     content_list.append({"type": "text", "text": content})
-
-            return [{"role": "user", "content": content_list}]
+            if 'doc_id' in example.keys():
+                return [{"role": "system", "content": format_prompt}, {"role": "user", "content": content_list}]
+            else:
+                return [{"role": "user", "content": content_list}]
         else:
-            return [{"role": "user", "content": prompt_str}]
+            if 'doc_id' in example.keys():
+                return [{"role": "system", "content": format_prompt}, {"role": "user", "content": prompt_str}]
+            else:
+                return [{"role": "user", "content": prompt_str}]
 
     def _filter_overlong_prompts(self, example: Dict[str, Any]) -> bool:
         messages = self._build_messages(example)
-        processing_class = self.processor if self.processor is not None else self.tokenizer
+        processing_class = self.tokenizer
         return (
             len(processing_class.apply_chat_template(messages, add_generation_prompt=True)) <= self.max_prompt_length
         )
@@ -176,8 +191,10 @@ class RLHFDataset(Dataset, ImageProcessMixin):
             model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
             input_ids = model_inputs.pop("input_ids")[0]
             attention_mask = model_inputs.pop("attention_mask")[0]
+            example["multi_modal_data"] = dict()
+            example["multi_modal_inputs"] = dict()
 
-        if self.processor is not None and self.processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
+        if self.processor is not None and self.processor.image_processor.__class__.__name__ in {"Qwen2VLImageProcessor", "Qwen2VLImageProcessorFast"}:
             # qwen2vl mrope
             position_ids = get_rope_index(
                 self.processor,

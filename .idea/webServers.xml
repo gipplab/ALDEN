@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="83243b9c-5f65-4c82-ad60-01b34d6be8eb" name="GWDG-SCC">
+        <fileTransfer accessType="SFTP" host="glogin-gpu.hpc.gwdg.de" port="22" sshConfigId="707ae71d-aaf6-4acd-b3c2-5d918269f7a8" sshConfig="u13688@glogin-gpu.hpc.gwdg.de:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

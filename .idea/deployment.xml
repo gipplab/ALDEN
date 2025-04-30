@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="GWDG-KISSKI" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="GWDG-KISSKI">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="GWDG-SCC">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/mnt/vast-standard/home/yang28/u13688/EasyR1" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
