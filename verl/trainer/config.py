@@ -35,6 +35,7 @@ def recursive_post_init(dataclass_obj):
 class DataConfig:
     train_files: str = ""
     val_files: str = ""
+    test_files: str = ""
     prompt_key: str = "prompt"
     answer_key: str = "answer"
     image_key: str = "images"
@@ -114,6 +115,23 @@ class PPOConfig:
         self.worker.actor.use_kl_loss = self.algorithm.use_kl_loss
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
+
+    def deep_post_init(self):
+        recursive_post_init(self)
+
+    def to_dict(self):
+        return asdict(self)
+
+@dataclass
+class GenerationConfig:
+    trainer: TrainerConfig = field(default_factory=TrainerConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
+
+    def post_init(self):
+        self.worker.rollout.prompt_length = self.data.max_prompt_length
+        self.worker.rollout.response_length = self.data.max_response_length
+        self.worker.rollout.trust_remote_code = self.worker.actor.model.trust_remote_code
 
     def deep_post_init(self):
         recursive_post_init(self)

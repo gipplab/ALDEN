@@ -350,7 +350,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
         input_ids: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
         attention_mask: torch.Tensor = prompts.batch["attention_mask"]
         position_ids: torch.Tensor = prompts.batch["position_ids"]
-        eos_token_id: int = prompts.meta_info["eos_token_id"]
         batch_size = input_ids.size(0)
 
         non_tensor_batch = prompts.non_tensor_batch
@@ -589,20 +588,6 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                                                         0].prod() // self.processor.image_processor.merge_size ** 2) + [
                                                 self.image_end_id] + self.result_suffix_ids
 
-                    # result_ids_list[ai] = []
-                    # result_mask_list[ai] = []
-                    # result_attention_mask[ai] = []
-                    # curr_inputs[ai] = deepcopy(original_inputs[ai])
-                    # active_indices += [ai]
-                    # curr_max_tokens[idx] = self.config.response_length
-
-            # output_ids_list = []
-            # # collect the results
-            # for i in range(len(vllm_inputs)):
-            #     for j in range(self.sampling_params.n):
-            #         idx = i * self.sampling_params.n + j
-            #         output_ids_list.append(result_ids_list[idx])
-
             response_ids = VF.pad_2d_list_to_length(
                 result_ids_list, self.pad_token_id, max_length=self.config.response_length
             ).to(input_ids.device)
@@ -633,16 +618,12 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 d = []
             if len(d) > 0:
                 image_inputs = self.processor.image_processor(d, return_tensors='pt')
-                # result_image_list[i] = dict(image_inputs)
                 delta_pid = get_rope_index(
                     self.processor,
                     input_ids=response_ids[i, :],
                     image_grid_thw=image_inputs['image_grid_thw'],
                 )
             else:
-                # result_image_list[i] = {}
-                # result_image_list[i]['pixel_values'] = torch.tensor([], dtype=torch.float32)
-                # result_image_list[i]['image_grid_thw'] = torch.tensor([], dtype=torch.int64)
                 delta_pid = get_rope_index(
                     self.processor,
                     input_ids=response_ids[i, :].unsqueeze(0),

@@ -176,3 +176,5 @@ checkpoints/
 wandb/
 
 dataset/
+generation_results/
+backups/
