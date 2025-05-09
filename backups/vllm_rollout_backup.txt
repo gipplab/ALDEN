@@ -409,7 +409,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         sampling_params=self.sampling_params,
                         use_tqdm=False
                     )
-                pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
+                # pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
                 search_queries = []
                 search_indices = []
                 search_doc_ids = []
