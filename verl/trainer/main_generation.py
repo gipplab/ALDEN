@@ -142,7 +142,7 @@ def main_task(config: GenerationConfig):
     # add to the data frame
     result_dataset['responses'] = output_lst
     result_dataset['extracted_answer'] = final_answer_lst
-    result_dataset['retrieved_pages'] = retrieved_page_lst
+    # result_dataset['retrieved_pages'] = retrieved_page_lst
     result_dataset['ans_ravqa_' + os.path.split(config.data.test_files)[1].split('.parquet')[0]] = eval_answer_lst
 
     # write to a new parquet

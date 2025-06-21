@@ -39,11 +39,14 @@ class RolloutConfig:
     max_model_len: Optional[int] = None
     max_num_batched_tokens: int = 8192
     disable_log_stats: bool = True
+    max_turn_num: int = 5
     val_override_config: Dict[str, Any] = field(default_factory=dict)
     """auto keys"""
     prompt_length: int = field(default=-1, init=False)
     response_length: int = field(default=-1, init=False)
     trust_remote_code: bool = field(default=False, init=False)
+    max_pixels: int = 4194304
+    min_pixels: int = 262144
 
     def to_dict(self):
         return asdict(self)

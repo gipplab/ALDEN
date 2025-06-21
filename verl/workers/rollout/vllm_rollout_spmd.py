@@ -22,6 +22,7 @@ import torch.distributed
 from tensordict import TensorDict
 from transformers import PreTrainedTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
+from collections import defaultdict
 
 from ...protocol import DataProto
 from ...utils import torch_functional as VF
@@ -236,9 +237,10 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
         self.result_prefix_ids = self.tokenizer.encode("<|im_start|>user\n<result>")
         self.result_suffix_ids = self.tokenizer.encode("</result><|im_end|>\n<|im_start|>assistant\n")
         self.top_n = config.top_n
-        self.max_pixels = 4194304
-        self.min_pixels = 262144
+        self.max_pixels = config.max_pixels
+        self.min_pixels = config.min_pixels
         self.vllm_image_limit = 15
+        self.max_turn_num = config.max_turn_num
 
     @retry(max=5, sleep=1)
     def batch_search(self, query: Union[str, List[str]], doc_ids: Union[str, List[str]], top_n=5):
@@ -400,14 +402,17 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
 
             result_attention_mask = [[] for _ in range(len(curr_inputs))]
 
+            turn_sequence_mask = [[] for _ in range(len(curr_inputs))]
+
             # collect the gotten page number
-            page_numbers_list = [{'N.O': []} for _ in range(len(curr_inputs))]
+            page_numbers_list = [{'N.O': defaultdict(list)} for _ in range(len(curr_inputs))]
 
             # collect the gotten page image
             result_image_list = [{'data': []} for _ in range(len(curr_inputs))]
 
             # generate until all inputs are finished
-            while active_indices:
+            turn_idx = 0
+            while active_indices and turn_idx < self.max_turn_num:
                 # only process the active inputs
                 active_inputs = [curr_inputs[i] for i in active_indices]
                 active_max_tokens = [curr_max_tokens[i] for i in active_indices]
@@ -434,7 +439,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                     finish_reason = outputs[i].finish_reason
                     stop_reason = outputs[i].stop_reason
 
-                    if finish_reason == 'stop' and stop_reason == None:
+                    if finish_reason == 'stop' and stop_reason is None:
                         if outputs[i].text.endswith('</search>'):
                             search_content = self.extract_search_content(outputs[i].text)
                             search_queries.append(search_content)
@@ -446,6 +451,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             result_mask_list[idx] += [1] * len(output_ids)
                             result_ids_list[idx] += output_ids
                             result_attention_mask[idx] += [1] * len(output_ids)
+                            turn_sequence_mask[idx] += [turn_idx] * len(output_ids)
                         elif outputs[i].text.endswith('</fetch>'):
                             fetch_content = self.extract_fetch_content(outputs[i].text)
                             fetch_queries.append(fetch_content)
@@ -457,16 +463,19 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             result_mask_list[idx] += [1] * len(output_ids)
                             result_ids_list[idx] += output_ids
                             result_attention_mask[idx] += [1] * len(output_ids)
+                            turn_sequence_mask[idx] += [turn_idx] * len(output_ids)
                         else:
                             curr_inputs[idx]['prompt_token_ids'] += output_ids
                             result_mask_list[idx] += [1] * len(output_ids)
                             result_ids_list[idx] += output_ids
                             result_attention_mask[idx] += [1] * len(output_ids)
+                            turn_sequence_mask[idx] += [turn_idx] * len(output_ids)
                     else:
                         curr_inputs[idx]['prompt_token_ids'] += output_ids
                         result_mask_list[idx] += [1] * len(output_ids)
                         result_ids_list[idx] += output_ids
                         result_attention_mask[idx] += [1] * len(output_ids)
+                        turn_sequence_mask[idx] += [turn_idx] * len(output_ids)
 
                 # batch process the search requests
                 almost_full_indices = []
@@ -481,19 +490,23 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         result_mask_list[idx] += [0] * len(self.result_prefix_ids)
                         result_ids_list[idx] += self.result_prefix_ids
                         result_attention_mask[idx] += [1] * len(self.result_prefix_ids)
+                        turn_sequence_mask[idx] += [-1] * len(self.result_prefix_ids)
                         while top_ki < self.top_n:
                             if len(result_mask_list[idx]) + (image_inputs['image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
                                 result_image_list[idx]['data'].append(result_str[top_ki])
-                                page_numbers_list[idx]['N.O'].append(p_id[top_ki])
+                                page_numbers_list[idx]['N.O'][turn_idx].append(p_id[top_ki])
+                                pstr = self.tokenizer.encode("Page {}: ".format(str(int(p_id[top_ki]) + 1)))
                                 if 'multi_modal_data' not in curr_inputs[idx].keys():
                                     curr_inputs[idx]['multi_modal_data'] = {'image': []}
                                 curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[top_ki])
-                                curr_inputs[idx]['prompt_token_ids'].extend([self.image_start_id, self.image_token_id, self.image_end_id])
+                                curr_inputs[idx]['prompt_token_ids'].extend(pstr + [self.image_start_id, self.image_token_id, self.image_end_id])
                                 result_mask_list[idx] += [0] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2
+                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2 + [0] * len(pstr)
+                                turn_sequence_mask[idx] += [-1] * (image_inputs[
+                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [-1] * 2 + [-1] * len(pstr)
                                 result_attention_mask[idx] += [1] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [1] * 2
-                                result_ids_list[idx] += [self.image_start_id] + [self.image_token_id] * (image_inputs[
+                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [1] * 2 + [1] * len(pstr)
+                                result_ids_list[idx] += pstr + [self.image_start_id] + [self.image_token_id] * (image_inputs[
                                                                     'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [self.image_end_id]
                             else:
                                 almost_full_indices.append(idx)
@@ -501,6 +514,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             top_ki += 1
                         curr_inputs[idx]['prompt_token_ids'].extend(self.result_suffix_ids)
                         result_mask_list[idx] += [0] * len(self.result_suffix_ids)
+                        turn_sequence_mask[idx] += [-1] * len(self.result_suffix_ids)
                         result_attention_mask[idx] += [1] * len(self.result_suffix_ids)
                         result_ids_list[idx] += self.result_suffix_ids
 
@@ -513,13 +527,15 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             image_inputs = self.processor.image_processor(processed_result, return_tensors='pt')
                             if len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
                                 result_image_list[idx]['data'].append(result_str[0])
-                                page_numbers_list[idx]['N.O'].append(p_id[0])
+                                page_numbers_list[idx]['N.O'][turn_idx].append(p_id[0])
                                 if 'multi_modal_data' not in curr_inputs[idx].keys():
                                     curr_inputs[idx]['multi_modal_data'] = {'image': []}
                                 curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[0])
                                 curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids + [self.image_start_id, self.image_token_id, self.image_end_id] + self.result_suffix_ids)
                                 result_mask_list[idx] += [0] * (image_inputs[
                                                                     'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
+                                turn_sequence_mask[idx] += [-1] * (image_inputs[
+                                                                    'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [-1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
                                 result_attention_mask[idx] += [1] * (image_inputs[
                                                                     'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
                                 result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [self.image_token_id] * (image_inputs[
@@ -530,6 +546,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             fetch_err_msg = self.tokenizer.encode(result[0])
                             curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids + fetch_err_msg + self.result_suffix_ids)
                             result_mask_list[idx] += [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + len(fetch_err_msg))
+                            turn_sequence_mask[idx] += [-1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + len(fetch_err_msg))
                             result_attention_mask[idx] += [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + len(fetch_err_msg))
                             result_ids_list[idx] += self.result_prefix_ids + fetch_err_msg + self.result_suffix_ids
                             # check if need to truncate for active indices
@@ -538,6 +555,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                     assert len(result_ids_list[idx]) == len(result_mask_list[idx]), f"result_ids_list: {len(result_ids_list)}, result_mask_list: {len(result_mask_list[idx])}"
                     if len(result_mask_list[idx]) >= self.config.response_length:
                         result_mask_list[idx] = result_mask_list[idx][:self.config.response_length]
+                        turn_sequence_mask[idx] = turn_sequence_mask[idx][:self.config.response_length]
                         result_attention_mask[idx] = result_attention_mask[idx][:self.config.response_length]
                         result_ids_list[idx] = result_ids_list[idx][:self.config.response_length]
                     else:
@@ -545,13 +563,14 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         if idx in new_active_indices and idx not in almost_full_indices:
                             length_checked_active_indices.append(idx)
                 active_indices = length_checked_active_indices
+                turn_idx += 1
 
             padding_indices = []
             for ai in range(len(curr_inputs)):
                 if len(result_image_list[ai]['data']) == 0:
                     padding_indices.append(ai)
             if len(padding_indices) > 0:
-                padding_results = [[Image.open('/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/assets/padding_image.jpg')]] * len(padding_indices)
+                padding_results = [[Image.open('/mnt/vast-standard/home/yang28/u13688/EasyR1/assets/padding_image.jpg')]] * len(padding_indices)
                 padding_results_str = [[base64.b64encode(image_to_bytes(padding_results[0][0])).decode("utf-8")]] * len(padding_indices)
                 padding_page_ids = [['0']] * len(padding_indices)
                 for idx, result, p_id, result_str in zip(padding_indices, padding_results, padding_page_ids, padding_results_str):
@@ -561,7 +580,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + len(
                         self.result_prefix_ids) + len(self.result_suffix_ids) + 2
                     result_image_list[idx]['data'].append(result_str[0])
-                    page_numbers_list[idx]['N.O'].append(p_id[0])
+                    page_numbers_list[idx]['N.O'][-1].append(p_id[0])
                     if 'multi_modal_data' not in curr_inputs[idx].keys():
                         curr_inputs[idx]['multi_modal_data'] = {'image': []}
                     curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[0])
@@ -570,11 +589,17 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         t = self.config.response_length - padding_img_len
                         result_mask_list[idx] = result_mask_list[idx][:t]
                         result_attention_mask[idx] = result_attention_mask[idx][:t]
+                        turn_sequence_mask[idx] = turn_sequence_mask[idx][:t]
                         result_ids_list[idx] = result_ids_list[idx][:t]
                     result_mask_list[idx] += [0] * (image_inputs[
                                                         'image_grid_thw'][
                                                         0].prod() // self.processor.image_processor.merge_size ** 2) + [
                                                  0] * (len(self.result_prefix_ids) + len(
+                        self.result_suffix_ids) + 2)
+                    turn_sequence_mask[idx] += [-1] * (image_inputs[
+                                                        'image_grid_thw'][
+                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                                                 -1] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
                     result_attention_mask[idx] += [1] * (image_inputs[
                                                              'image_grid_thw'][
@@ -594,6 +619,9 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
             result_mask = VF.pad_2d_list_to_length(
                 result_mask_list, 0, max_length=self.config.response_length
             ).to(input_ids.device)
+            turn_sequence_mask = VF.pad_2d_list_to_length(
+                turn_sequence_mask, -1, max_length=self.config.response_length
+            ).to(input_ids.device)
 
             if self.sampling_params.n > 1:
                 batch_size = batch_size * self.sampling_params.n
@@ -611,7 +639,11 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 result_attention_mask, 0, max_length=self.config.response_length
             ).to(input_ids.device)
         delta_position_id = []
+        end_of_response_position_mask = torch.zeros_like(result_mask)
         for i, input in enumerate(curr_inputs):
+            max_turn = torch.max(turn_sequence_mask[i, :]).item() + 1
+            for mti in range(max_turn):
+                end_of_response_position_mask[i, torch.max((turn_sequence_mask[i, :] == mti).nonzero(as_tuple=True)[0]).item()] = 1
             if 'multi_modal_data' in input.keys():
                 d = input['multi_modal_data']['image']
             else:
@@ -658,6 +690,8 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 "attention_mask": attention_mask,
                 "response_mask": response_mask,
                 "loss_mask": loss_mask,
+                "end_of_response_position_mask": end_of_response_position_mask,
+                "turn_sequence_mask": turn_sequence_mask,
                 "position_ids": position_ids,
             },
             batch_size=batch_size,

@@ -62,6 +62,7 @@ class DataConfig:
 class AlgorithmConfig:
     gamma: float = 1.0
     lam: float = 1.0
+    turn_level_gamma: float = 1.0
     adv_estimator: str = "grpo"
     disable_kl: bool = False
     use_kl_loss: bool = False
@@ -115,6 +116,15 @@ class PPOConfig:
         self.worker.actor.use_kl_loss = self.algorithm.use_kl_loss
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
+        self.worker.critic.multi_turn_rewards = self.worker.reward.multi_turn_rewards
+        self.worker.actor.max_pixels = self.data.max_pixels
+        self.worker.actor.min_pixels = self.data.min_pixels
+        self.worker.critic.max_pixels = self.data.max_pixels
+        self.worker.critic.min_pixels = self.data.min_pixels
+        self.worker.rollout.max_pixels = self.data.max_pixels
+        self.worker.rollout.min_pixels = self.data.min_pixels
+        self.worker.ref.max_pixels = self.data.max_pixels
+        self.worker.ref.min_pixels = self.data.min_pixels
 
     def deep_post_init(self):
         recursive_post_init(self)

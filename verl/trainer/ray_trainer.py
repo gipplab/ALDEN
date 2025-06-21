@@ -32,6 +32,7 @@ from codetiming import Timer
 from ray.experimental.tqdm_ray import tqdm
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PreTrainedTokenizer, ProcessorMixin
+import pydevd_pycharm
 
 from ..protocol import DataProto, pad_dataproto_to_divisor, unpad_dataproto
 from ..single_controller.base import Worker
@@ -68,6 +69,10 @@ class AdvantageEstimator(str, Enum):
     """
 
     GAE = "gae"
+    MASKED_GAE = "masked_gae"
+    BI_LEVEL_GAE = "bi_level_gae"
+    TURN_WISE_GAE = "turn_wise_gae"
+    PAV_GRPO = "pav_grpo"
     GRPO = "grpo"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
@@ -132,7 +137,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.KLController, kl_penal
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0):
+def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, turn_level_gamma: float = 1.0):
     token_level_rewards = data.batch["token_level_rewards"]
     response_mask = data.batch["response_mask"]
     index = data.non_tensor_batch["uid"]
@@ -141,6 +146,28 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         advantages, returns = core_algos.compute_gae_advantage_return(
             token_level_rewards, values, response_mask, gamma, lam
         )
+    elif adv_estimator == AdvantageEstimator.MASKED_GAE:
+        values = data.batch["values"]
+        gae_mask = data.batch["loss_mask"]
+        advantages, returns = core_algos.compute_gae_advantage_return_with_loss_mask(
+            token_level_rewards, values, gae_mask, gamma, lam
+        )
+    elif adv_estimator == AdvantageEstimator.BI_LEVEL_GAE:
+        values = data.batch["values"]
+        gae_mask = data.batch["loss_mask"]
+        turn_position_mask = data.batch['end_of_response_position_mask']
+        advantages, returns = core_algos.compute_bi_level_gae_advantage_return(
+            token_level_rewards, turn_position_mask, values, gae_mask, gamma, lam, turn_level_gamma,
+        )
+    elif adv_estimator == AdvantageEstimator.TURN_WISE_GAE:
+        values = data.batch["values"]
+        gae_mask = data.batch["loss_mask"]
+        turn_position_mask = data.batch['end_of_response_position_mask']
+        advantages, returns = core_algos.compute_turn_wise_gae_advantage_return(
+            token_level_rewards, turn_position_mask, values, gae_mask, lam, turn_level_gamma,
+        )
+    elif adv_estimator == AdvantageEstimator.PAV_GRPO:
+        NotImplementedError
     elif adv_estimator == AdvantageEstimator.GRPO:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
@@ -218,7 +245,7 @@ class RayPPOTrainer:
             self.kl_ctrl = core_algos.FixedKLController(init_kl_coef=0.0)
             print("KL is disabled, no KL metrics will be logged. Please set `kl_coef=0` to log KL metrics.")
 
-        if config.algorithm.adv_estimator == AdvantageEstimator.GAE:
+        if config.algorithm.adv_estimator in {AdvantageEstimator.GAE, AdvantageEstimator.TURN_WISE_GAE, AdvantageEstimator.BI_LEVEL_GAE, AdvantageEstimator.MASKED_GAE}:
             self.use_critic = True
         else:
             self.use_critic = False
@@ -277,7 +304,7 @@ class RayPPOTrainer:
         rng = np.random.RandomState(42)
         rng.shuffle(samples)
 
-        samples = samples[: self.config.trainer.val_generations_to_log]
+        samples = samples[:100]
         self.logger.log_generation(samples, self.global_step)
 
     def _validate(self) -> Dict[str, Any]:
@@ -542,6 +569,7 @@ class RayPPOTrainer:
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
+                    # pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
                     # batch.non_tensor_batch.pop("multi_modal_data", None)
 
                     # compute reward
@@ -599,6 +627,7 @@ class RayPPOTrainer:
                             adv_estimator=self.config.algorithm.adv_estimator,
                             gamma=self.config.algorithm.gamma,
                             lam=self.config.algorithm.lam,
+                            turn_level_gamma=self.config.algorithm.turn_level_gamma
                         )
 
                     # update critic

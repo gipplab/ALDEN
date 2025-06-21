@@ -5,69 +5,20 @@ from typing import Union, List
 from collections import Counter
 
 
-def validate_format(text: str) -> tuple[bool, str]:
-    # check if <think></think>, <answer></answer> is paired
-    if text.count('<think>') != text.count('</think>'):
-        return False, "<think> </think> not paired"
+def validate_search_action_format(text: str) -> tuple[bool, str]:
+    pattern = re.compile(r"<think>.*?</think>\s*<search>.*?</search>", re.DOTALL)
+    format_match = re.fullmatch(pattern, text)
+    return (True, 'format correct') if format_match else (False, 'format incorrect')
 
-    if text.count('<think>') == 0 or text.count('</think>') == 0:
-        return False, "<think> or </think> not found"
+def validate_fetch_action_format(text: str) -> tuple[bool, str]:
+    pattern = re.compile(r"<think>.*?</think>\s*<fetch>.*?</fetch>", re.DOTALL)
+    format_match = re.fullmatch(pattern, text)
+    return (True, 'format correct') if format_match else (False, 'format incorrect')
 
-    if (text.count('<search>') == 0 or text.count('</search>') == 0) and (text.count('<fetch>') == 0 or text.count('</fetch>') == 0):
-        return False, "<search> or </search> and <fetch> or </fetch> not found"
-
-    if text.count('<answer>') != 1 or text.count('</answer>') != 1:
-        return False, "<answer> or </answer> not found"
-
-    # check the order of search/result
-    current_pos = 0
-    while True:
-        search_pos = text.find('<search>', current_pos)
-        if search_pos == -1:
-            break
-
-        result_pos = text.find('<result>', search_pos)
-        search_end_pos = text.find('</search>', search_pos)
-        result_end_pos = text.find('</result>', result_pos)
-
-        if -1 in (result_pos, search_end_pos, result_end_pos):
-            return False, "search/result tags are incomplete"
-
-        if not (search_pos < search_end_pos < result_pos < result_end_pos):
-            return False, "search/result tags are nested in the wrong order"
-
-        current_pos = result_end_pos
-
-    # check the order of fetch/result
-    current_pos = 0
-    while True:
-        search_pos = text.find('<fetch>', current_pos)
-        if search_pos == -1:
-            break
-
-        result_pos = text.find('<result>', search_pos)
-        search_end_pos = text.find('</fetch>', search_pos)
-        result_end_pos = text.find('</result>', result_pos)
-
-        if -1 in (result_pos, search_end_pos, result_end_pos):
-            return False, "fetch/result tags are incomplete"
-
-        if not (search_pos < search_end_pos < result_pos < result_end_pos):
-            return False, "fetch/result tags are nested in the wrong order"
-
-        current_pos = result_end_pos
-
-    # check if \boxed{} is in the answer
-    answer_start = text.find('<answer>')
-    answer_end = text.find('</answer>')
-    if answer_start > answer_end:
-        return False, "<answer> must be before </answer>"
-    answer_content = text[answer_start:answer_end]
-    if '\\boxed{' not in answer_content or '}' not in answer_content:
-        return False, "answer is missing \\boxed{} format"
-
-    return True, "format is correct"
-
+def validate_answer_action_format(text: str) -> tuple[bool, str]:
+    pattern = re.compile(r"<think>.*?</think>\s*<answer>.*?</answer>", re.DOTALL)
+    format_match = re.fullmatch(pattern, text)
+    return (True, 'format correct') if format_match else (False, 'format incorrect')
 
 def extract_answer(text: str):
     text = text.strip()
@@ -192,54 +143,72 @@ def compute_score(solution_str, ground_truth) -> dict:
     #     "hit_recall": hit_r,
     #     "hit_f1": hit_f1
     # }
-    result_score = {}
+    result_score = {'search': 0, 'fetch': 0, 'turn_response_length': len(solution_str.split())}
 
     response = solution_str
-    valid_template, reason = validate_format(response)
-    if not valid_template:
-        result_score.update({"overall": 0.0,
-                             "format": 0.0,
-                             "accuracy": 0.0,})
-                             # "reason": f'bad format: {reason}'
-        return result_score
+    if ground_truth is not None:
+        valid_template, reason = validate_answer_action_format(response)
+        if not valid_template:
+            result_score.update({"overall": 0.0,
+                                 "format": 0.0,
+                                 "accuracy": 0.0,})
+                                 # "reason": f'bad format: {reason}'
+            return result_score
 
-    # if response.endswith(tokenizer.eos_token):
-    #     response = response[:-len(tokenizer.eos_token)]
-    # else:
-    #     return {"overall": 0.0,
-    #             "format": 0.0,
-    #             "accuracy": 0.0,
-    #             "reason": f'over length'}
+        # if response.endswith(tokenizer.eos_token):
+        #     response = response[:-len(tokenizer.eos_token)]
+        # else:
+        #     return {"overall": 0.0,
+        #             "format": 0.0,
+        #             "accuracy": 0.0,
+        #             "reason": f'over length'}
 
-    answer_part = extract_answer(response)
-    if answer_part is not None:
-        try:
-            answer = remove_boxed(last_boxed_only_string(answer_part))
-        except Exception as e:
-            result_score.update({"overall": 0,
-                    "format": 0,
-                    "accuracy": 0,})
-                    # "reason": f'find box error: {e}'
+        answer_part = extract_answer(response)
+        if answer_part is not None:
+            try:
+                answer = remove_boxed(last_boxed_only_string(answer_part))
+            except Exception as e:
+                result_score.update({"overall": 0.2,
+                        "format": 0.2,
+                        "accuracy": 0,})
+                        # "reason": f'find box error: {e}'
+                return result_score
+        else:
+            answer = ''
+            result_score.update({"overall": 0.1,
+                                 "format": 0.1,
+                                 "accuracy": 0.0,})
+                                 # "reason": f'cannot extract answer'
+            return result_score
+
+        f1_score = get_f1_score(answer, ground_truth)
+        if f1_score > 0:
+            result_score.update(
+                {"overall": f1_score * 5 + 0.4,
+                                 "format": 1.0,
+                                 "accuracy": f1_score,})
+                                 # "reason": f'correct answer, get f1 score: {f1_score}'
+            return result_score
+        else:
+            result_score.update({"overall": 0.4,
+                                 "format": 1.0,
+                                 "accuracy": 0.0,})
+                                 # "reason": f'wrong answer but good format: {answer}'
             return result_score
     else:
-        answer = ''
-        result_score.update({"overall": 0.2,
-                             "format": 0.0,
-                             "accuracy": 0.0,})
-                             # "reason": f'cannot extract answer'
-        return result_score
+        valid_template, reason = validate_search_action_format(response)
+        action = 'search'
+        if not valid_template:
+            valid_template, reason = validate_fetch_action_format(response)
+            action = 'fetch'
+        if valid_template:
+            result_score[action] += 1
+            result_score.update({"overall": 0.4,
+                                 "format": 1.0,
+                                 })
+        else:
+            result_score.update({"overall": 0.0,
+                                 "format": 0.0,
+                                 })
 
-    f1_score = get_f1_score(answer, ground_truth)
-    if f1_score > 0:
-        result_score.update(
-            {"overall": f1_score * 0.5 + 0.5,
-                             "format": 1.0,
-                             "accuracy": f1_score,})
-                             # "reason": f'correct answer, get f1 score: {f1_score}'
-        return result_score
-    else:
-        result_score.update({"overall": 0.5,
-                             "format": 1.0,
-                             "accuracy": 0.0,})
-                             # "reason": f'wrong answer but good format: {answer}'
         return result_score

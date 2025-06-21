@@ -19,6 +19,9 @@ from functools import wraps
 import time
 import pydevd_pycharm
 from tqdm import tqdm
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.models import Filter
 
 def cache_manager(func):
     """
@@ -373,6 +376,7 @@ class DenseRetriever(BaseRetriever):
                 for p, i in zip(page_number, idx):
                     temp[p] = i
                 self.page2idx[k] = copy.deepcopy(temp)
+            json.dump(self.page2idx, open(os.path.join(os.path.split(self.corpus_path)[0], 'page2idx.json'), 'w'))
     
     def load_index(self):
         if self.index_path is None or not os.path.exists(self.index_path):

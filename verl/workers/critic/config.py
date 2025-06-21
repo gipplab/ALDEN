@@ -30,7 +30,10 @@ class CriticConfig:
     cliprange_value: float = 0.5
     ppo_epochs: int = 1
     padding_free: bool = False
+    multi_turn_rewards: bool = False
     ulysses_sequence_parallel_size: int = 1
+    max_pixels: int = 4194304
+    min_pixels: int = 262144
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)

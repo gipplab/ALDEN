@@ -105,7 +105,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             os.makedirs(hf_path, exist_ok=True)
             assert isinstance(self.model._fsdp_wrapped_module, PreTrainedModel)
             self.model._fsdp_wrapped_module.config.save_pretrained(hf_path)
-            self.model._fsdp_wrapped_module.generation_config.save_pretrained(hf_path)
+            if self.model._fsdp_wrapped_module.generation_config is not None:
+                self.model._fsdp_wrapped_module.generation_config.save_pretrained(hf_path)
             self.processing_class.save_pretrained(hf_path)
 
         dist.barrier()
