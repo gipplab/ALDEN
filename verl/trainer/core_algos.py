@@ -88,6 +88,253 @@ def get_kl_controller(algorithm_config: "AlgorithmConfig") -> KLController:
 
     return kl_ctrl
 
+@torch.no_grad()
+def compute_turn_wise_gae_advantage_return(
+        token_level_rewards: torch.Tensor,
+        reward_mask: torch.Tensor,
+        values: torch.Tensor,
+        loss_mask: torch.Tensor,
+        lam: float,
+        high_level_gamma: float
+):
+    """Modified GAE calculation that compute two level of advantage and return:
+    high level: per-turn wise
+    low level: token wise
+    there're two level of MDP, where high level is the agentic MDP and low level is the token MDP
+    Args:
+        token_level_rewards: `(torch.Tensor)` (multi-turn reward, per turn reward is given at eos token for each response token sequence)
+            shape: (bs, response_length)
+        reward_mask: `(torch.Tensor)`
+            shape: (bs, response_length). 1 for reward position (end of each llm response)
+        values: `(torch.Tensor)`
+            shape: (bs, response_length)
+        loss_mask: `(torch.Tensor)`
+            shape: (bs, response_length). 1 for llm_raw_response, 0 for environment info and paddings
+        high_level_gamma: `(float)`
+            discounted factor used in RL for per-turn reward
+        lam: `(float)`
+            lambda value when computing Generalized Advantage Estimation
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        Returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+    batch_size, gen_len = token_level_rewards.shape
+    advantages = torch.zeros_like(token_level_rewards)
+    returns = torch.zeros_like(token_level_rewards)
+    # temp_0 = torch.zeros((loss_mask.size(0), 1), dtype=loss_mask.dtype, device=loss_mask.device)
+    # temp_1 = torch.ones((loss_mask.size(0), 1), dtype=loss_mask.dtype, device=loss_mask.device)
+    # reward_mask = torch.cat((temp_0, reward_mask[:, :-1]), dim=-1)
+    # loss_mask = torch.cat((temp_1, loss_mask[:, :-1]), dim=-1)
+
+    for b in range(batch_size):
+        # First, calculate high level advantage and return for eos token of each turn using high level gamma
+        eos_positions = reward_mask[b].nonzero(as_tuple=True)[0]
+        lastgaelam = 0.0
+        for i in range(len(eos_positions) - 1, -1, -1):
+            curr_pos = eos_positions[i]
+
+            # Get the next value
+            if i < len(eos_positions) - 1:
+                # Next valid position
+                next_pos = eos_positions[i + 1]
+                nextvalue = values[b, next_pos]
+
+            else:
+                # Last valid position
+                nextvalue = 0.0
+
+            # Calculate delta using the next valid token
+            delta = token_level_rewards[b, curr_pos] + high_level_gamma * nextvalue - values[b, curr_pos]
+
+            # Update advantage estimate
+            lastgaelam = delta + high_level_gamma * lam * lastgaelam
+            advantages[b, curr_pos] = lastgaelam
+
+        for i, pos in enumerate(eos_positions):
+            returns[b, pos] = advantages[b, pos] + values[b, pos]
+
+        # each token in the sequence has the same advantage
+        cur_adv = 0.0
+        valid_positions = loss_mask[b].nonzero(as_tuple=True)[0]
+        for i in range(len(valid_positions) - 1, -1, -1):
+            curr_pos = valid_positions[i]
+            if curr_pos not in eos_positions:
+                # Next valid position
+                advantages[b, curr_pos] = cur_adv
+            else:
+                # Last valid position
+                cur_adv = advantages[b, curr_pos]
+
+    advantages = VF.masked_whiten(advantages, loss_mask)
+
+    return advantages, returns
+
+
+@torch.no_grad()
+def compute_bi_level_gae_advantage_return(
+        token_level_rewards: torch.Tensor,
+        reward_mask: torch.Tensor,
+        values: torch.Tensor,
+        loss_mask: torch.Tensor,
+        gamma: float,
+        lam: float,
+        high_level_gamma: float
+):
+    """Modified GAE calculation that compute two level of advantage and return:
+    high level: per-turn wise
+    low level: token wise
+    there're two level of MDP, where high level is the agentic MDP and low level is the token MDP
+    Args:
+        token_level_rewards: `(torch.Tensor)` (multi-turn reward, per turn reward is given at eos token for each response token sequence)
+            shape: (bs, response_length)
+        reward_mask: `(torch.Tensor)`
+            shape: (bs, response_length). 1 for reward position (end of each llm response)
+        values: `(torch.Tensor)`
+            shape: (bs, response_length)
+        loss_mask: `(torch.Tensor)`
+            shape: (bs, response_length). 1 for llm_raw_response, 0 for environment info and paddings
+        gamma: `(float)`
+            discounted factor used in RL for token rewards
+        high_level_gamma: `(float)`
+            discounted factor used in RL for per-turn reward
+        lam: `(float)`
+            lambda value when computing Generalized Advantage Estimation
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        Returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+    batch_size, gen_len = token_level_rewards.shape
+    advantages = torch.zeros_like(token_level_rewards)
+    returns = torch.zeros_like(token_level_rewards)
+    updated_reward = token_level_rewards.clone()
+    # temp_0 = torch.zeros((loss_mask.size(0), 1), dtype=loss_mask.dtype, device=loss_mask.device)
+    # temp_1 = torch.ones((loss_mask.size(0), 1), dtype=loss_mask.dtype, device=loss_mask.device)
+    # reward_mask = torch.cat((temp_0, reward_mask[:, :-1]), dim=-1)
+    # loss_mask = torch.cat((temp_1, loss_mask[:, :-1]), dim=-1)
+
+    for b in range(batch_size):
+        # First, calculate high level advantage and return for eos token of each turn using high level gamma
+        eos_positions = reward_mask[b].nonzero(as_tuple=True)[0]
+        lastgaelam = 0.0
+        for i in range(len(eos_positions) - 1, -1, -1):
+            curr_pos = eos_positions[i]
+
+            # Get the next value
+            if i < len(eos_positions) - 1:
+                # Next valid position
+                next_pos = eos_positions[i + 1]
+                nextvalue = values[b, next_pos]
+
+            else:
+                # Last valid position
+                nextvalue = 0.0
+
+            # Calculate delta using the next valid token
+            delta = updated_reward[b, curr_pos] + high_level_gamma * nextvalue - values[b, curr_pos]
+
+            # Update advantage estimate
+            lastgaelam = delta + high_level_gamma * lam * lastgaelam
+            advantages[b, curr_pos] = lastgaelam
+
+        for i, pos in enumerate(eos_positions):
+            returns[b, pos] = advantages[b, pos] + values[b, pos]
+            updated_reward[b, pos] = advantages[b, pos] + values[b, pos]
+
+        # Then, calculate low level advantage and return for each token using gamma, assume the reward for the sequence now is the return at eos token
+        lastgaelam = 0.0
+        valid_positions = loss_mask[b].nonzero(as_tuple=True)[0]
+        for i in range(len(valid_positions) - 1, -1, -1):
+            curr_pos = valid_positions[i]
+            if curr_pos not in eos_positions:
+                # Next valid position
+                next_pos = valid_positions[i + 1]
+                nextvalue = values[b, next_pos]
+            else:
+                # Last valid position
+                nextvalue = 0.0
+                lastgaelam = 0.0
+            delta = updated_reward[b, curr_pos] + gamma * nextvalue - values[b, curr_pos]
+            lastgaelam = delta + gamma * lam * lastgaelam
+            advantages[b, curr_pos] = lastgaelam
+            returns[b, curr_pos] = lastgaelam + values[b, curr_pos]
+
+    advantages = VF.masked_whiten(advantages, loss_mask)
+
+    return advantages, returns
+
+
+@torch.no_grad()
+def compute_gae_advantage_return_with_loss_mask(token_level_rewards: torch.Tensor, values: torch.Tensor,
+                                                loss_mask: torch.Tensor, gamma: float, lam: float):
+    """Modified GAE calculation that handle multi-turn with loss mask
+    Here we should also ensure that the trajectory score is given at the last valid token instead of last token
+    Seems it's true in reward manager
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        values: `(torch.Tensor)`
+            shape: (bs, response_length)
+        loss_mask: `(torch.Tensor)`
+            shape: (bs, response_length). 1 for llm_raw_response, 0 for environment info and paddings
+        gamma: `(float)`
+            discounted factor used in RL
+        lam: `(float)`
+            lambda value when computing Generalized Advantage Estimation
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        Returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+
+    batch_size, gen_len = token_level_rewards.shape
+    advantages = torch.zeros_like(token_level_rewards)
+    returns = torch.zeros_like(token_level_rewards)
+
+    for b in range(batch_size):
+        lastgaelam = 0.0
+
+        # Find the valid token positions (where loss_mask is 1)
+        valid_positions = loss_mask[b].nonzero(as_tuple=True)[0]
+
+        if len(valid_positions) == 0:
+            continue
+
+        for i in range(len(valid_positions) - 1, -1, -1):
+            curr_pos = valid_positions[i]
+
+            # Get the next value
+            if i < len(valid_positions) - 1:
+                # Next valid position
+                next_pos = valid_positions[i + 1]
+                nextvalue = values[b, next_pos]
+
+            else:
+                # Last valid position
+                nextvalue = 0.0
+
+            # Calculate delta using the next valid token
+            delta = token_level_rewards[b, curr_pos] + gamma * nextvalue - values[b, curr_pos]
+
+            # Update advantage estimate
+            lastgaelam = delta + gamma * lam * lastgaelam
+            advantages[b, curr_pos] = lastgaelam
+
+        # Calculate returns for valid positions
+        for i, pos in enumerate(valid_positions):
+            returns[b, pos] = advantages[b, pos] + values[b, pos]
+
+    advantages = VF.masked_whiten(advantages, loss_mask)
+
+    return advantages, returns
+
 
 @torch.no_grad()
 def compute_gae_advantage_return(
@@ -110,6 +357,26 @@ def compute_gae_advantage_return(
             discounted factor used in RL
         lam: `(float)`
             lambda value when computing Generalized Advantage Estimation (https://arxiv.org/abs/1506.02438)
+    Before the introduction of GAE, the advantage is calculated as:
+        detal_t = r_t + gamma * V_t+1 - V_t
+    where
+        - r_t represents the instant gain at t step
+        - V_t+1 represents the "true" future gain at t+1 step
+        - r_t + gamma * V_t+1 represents the "true" future gain at t step
+        - V_t represents the estimated future gain at t step
+    After the integration of GAE technique, the advantage is calculated as:
+        A_t = delta_t + gamma * lambda * A_t+1
+    so we can not only consider the current advantage, but also the future advantage.
+
+    Also due to the GAE, we update the method of calculating "true" value for updating the critic model
+    classically, we use r_t + gamma * V_t+1 as "true" value and use (r_t + gamma * V_t+1 - V_t) as the loss function.
+    Now, denote the "true" value with return_t, it is calculated as
+    returns_t = A_t + V_t
+              = delta_t + gamma * lambda * A_t+1 + V_t
+              = r_t + gamma * V_t+1 - V_t + gamma * lambda * A_t+1 + V_t
+              = r_t + gamma * (V_t+1 + lambda * A_t+1)
+
+
 
     Returns:
         advantages: `(torch.Tensor)`

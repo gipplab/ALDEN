@@ -26,6 +26,8 @@ class RewardConfig:
     score_function: Optional[str] = None
     score_function_kwargs: dict = field(default_factory=dict)
     skip_special_tokens: bool = True
+    multi_turn_rewards: bool = False
+    repetition_penalty_factor: float = 1.5
     """auto keys"""
     score_function_name: Optional[str] = field(default=None, init=False)
 

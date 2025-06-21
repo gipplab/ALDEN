@@ -33,6 +33,7 @@ from transformers import (
     AutoModelForVision2Seq,
     GenerationConfig,
     PreTrainedModel,
+    Qwen2_5_VLConfig
 )
 from transformers.modeling_utils import no_init_weights
 
@@ -58,6 +59,7 @@ from .config import ActorConfig, CriticConfig, FSDPConfig, ModelConfig, OptimCon
 from .rollout import vLLMRollout, vLLMRolloutAgent
 from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
+from ..models.transformers.modeling_qwen_2_5_vl_patch import Qwen2_5_VLForTokenClassification
 import pydevd_pycharm
 
 
@@ -189,6 +191,9 @@ class FSDPWorker(Worker):
 
         if self._is_critic:
             auto_class = AutoModelForTokenClassification
+            if "Qwen2.5-VL" in model_config.model_path:
+                self.model_config.num_labels = 1
+                auto_class.register(Qwen2_5_VLConfig, Qwen2_5_VLForTokenClassification)
         elif type(self.model_config) in AutoModelForVision2Seq._model_mapping.keys():
             auto_class = AutoModelForVision2Seq
         else:
@@ -385,7 +390,7 @@ class FSDPWorker(Worker):
             from .critic.dp_critic import DataParallelPPOCritic  # lazy import
 
             self.critic = DataParallelPPOCritic(
-                config=self.config,
+                config=self.config.critic,
                 critic_module=self.fsdp_module,
                 critic_optimizer=self.optimizer,
             )
@@ -578,7 +583,7 @@ class FSDPWorker(Worker):
 
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
-            values = self.critic.compute_values(data=data)
+            values = self.critic.compute_values(data=data, processor=self.processor)
             output = DataProto.from_dict(tensors={"values": values})
             output = self.ulysses_sharding_manager.postprocess_data(data=output)
 
@@ -600,7 +605,7 @@ class FSDPWorker(Worker):
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
             with Timer(name="update_critic", logger=None) as timer:
-                metrics = self.critic.update_critic(data=data)
+                metrics = self.critic.update_critic(data=data, processor=self.processor)
 
             delta_time = timer.last
             global_num_tokens = data.meta_info["global_token_num"]

@@ -23,6 +23,10 @@ import torch
 from ray.experimental.tqdm_ray import tqdm
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from PIL import Image
+import base64
+from io import BytesIO
+import numpy as np
 
 from ...protocol import DataProto
 from ...trainer import core_algos
@@ -31,6 +35,7 @@ from ...utils.py_functional import append_to_dict
 from ...utils.ulysses import gather_outputs_and_unpad, ulysses_pad_and_slice_inputs
 from .base import BasePPOCritic
 from .config import CriticConfig
+from ...utils.dataset import ImageProcessMixin
 
 
 try:
@@ -42,12 +47,14 @@ except ImportError:
 __all__ = ["DataParallelPPOCritic"]
 
 
-class DataParallelPPOCritic(BasePPOCritic):
+class DataParallelPPOCritic(BasePPOCritic, ImageProcessMixin):
     def __init__(self, config: CriticConfig, critic_module: nn.Module, critic_optimizer: torch.optim.Optimizer):
         super().__init__(config)
         self.rank = int(os.getenv("RANK", "0"))
         self.critic_module = critic_module
         self.critic_optimizer = critic_optimizer
+        self.max_pixels = config.max_pixels
+        self.min_pixels = config.min_pixels
 
     def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         input_ids = micro_batch["input_ids"]
@@ -138,11 +145,23 @@ class DataParallelPPOCritic(BasePPOCritic):
         return grad_norm
 
     @torch.no_grad()
-    def compute_values(self, data: DataProto) -> torch.Tensor:
+    def compute_values(self, data: DataProto, processor=None) -> torch.Tensor:
         self.critic_module.eval()
 
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
+            if 'doc_id' in data.non_tensor_batch.keys():
+                mm_inputs = []
+                for result_strs in data.non_tensor_batch['multi_modal_data']:
+                    if len(result_strs['data']) > 0:
+                        img_data = [self.process_image(Image.open(BytesIO(base64.urlsafe_b64decode(result_str)))) for
+                                    result_str in result_strs['data']]
+                        img_input = dict(processor.image_processor(img_data, return_tensors='pt'))
+                    else:
+                        img_input = {'pixel_values': torch.tensor([], dtype=torch.float32),
+                                     'image_grid_thw': torch.tensor([], dtype=torch.int64)}
+                    mm_inputs.append(img_input)
+                data.non_tensor_batch['multi_modal_inputs'] = np.array(mm_inputs, object)
             non_tensor_select_keys = ["multi_modal_inputs"]
         else:
             non_tensor_select_keys = []
@@ -151,8 +170,8 @@ class DataParallelPPOCritic(BasePPOCritic):
             self.config.micro_batch_size_per_device_for_experience
         )
         values_lst = []
-        if self.rank == 0:
-            micro_batches = tqdm(micro_batches, desc="Compute values", position=2)
+        # if self.rank == 0:
+        #     micro_batches = tqdm(micro_batches, desc="Compute values", position=2)
 
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
@@ -166,11 +185,28 @@ class DataParallelPPOCritic(BasePPOCritic):
         values = values * attention_mask[:, -response_length - 1 : -1]
         return values
 
-    def update_critic(self, data: DataProto) -> Dict[str, Any]:
+    def update_critic(self, data: DataProto, processor=None) -> Dict[str, Any]:
         self.critic_module.train()
 
         select_keys = ["input_ids", "responses", "attention_mask", "position_ids", "values", "returns"]
+        if 'loss_mask' in data.batch:
+            select_keys.append('loss_mask')
+        if 'end_of_response_position_mask' in data.batch:
+            select_keys.append('end_of_response_position_mask')
+
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
+            if 'doc_id' in data.non_tensor_batch.keys():
+                mm_inputs = []
+                for result_strs in data.non_tensor_batch['multi_modal_data']:
+                    if len(result_strs['data']) > 0:
+                        img_data = [self.process_image(Image.open(BytesIO(base64.urlsafe_b64decode(result_str)))) for
+                                    result_str in result_strs['data']]
+                        img_input = dict(processor.image_processor(img_data, return_tensors='pt'))
+                    else:
+                        img_input = {'pixel_values': torch.tensor([], dtype=torch.float32),
+                                     'image_grid_thw': torch.tensor([], dtype=torch.int64)}
+                    mm_inputs.append(img_input)
+                data.non_tensor_batch['multi_modal_inputs'] = np.array(mm_inputs, object)
             non_tensor_select_keys = ["multi_modal_inputs"]
         else:
             non_tensor_select_keys = []
@@ -181,16 +217,16 @@ class DataParallelPPOCritic(BasePPOCritic):
 
         metrics = defaultdict(list)
         for _ in range(self.config.ppo_epochs):
-            if self.rank == 0:
-                mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
+            # if self.rank == 0:
+            #     mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
 
             for mini_batch in mini_batches:
                 gradient_accumulation = (
                     self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update
                 )
                 micro_batches = mini_batch.split(self.config.micro_batch_size_per_device_for_update)
-                if self.rank == 0:
-                    micro_batches = tqdm(micro_batches, desc="Update critic", position=3)
+                # if self.rank == 0:
+                #     micro_batches = tqdm(micro_batches, desc="Update critic", position=3)
 
                 for micro_batch in micro_batches:
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
@@ -199,7 +235,15 @@ class DataParallelPPOCritic(BasePPOCritic):
                     values = model_inputs["values"]
                     returns = model_inputs["returns"]
                     response_length = responses.size(1)
-                    action_mask = attention_mask[:, -response_length - 1 : -1]  # shift left for value computation
+                    if not self.config.multi_turn_rewards:
+                        action_mask = attention_mask[:, -response_length - 1 : -1]  # shift left for value computation
+                    else:
+                        # temp = torch.zeros((responses.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device)
+                        # action_mask = torch.cat((temp, model_inputs['end_of_response_position_mask'][:, :-1]), dim=-1)
+                        # temp = torch.ones((responses.size(0), 1), dtype=attention_mask.dtype,
+                        #                    device=attention_mask.device)
+                        # action_mask = torch.cat((temp, model_inputs['loss_mask'][:, :-1]), dim=-1)
+                        action_mask = model_inputs['loss_mask']
 
                     vpreds = self._forward_micro_batch(model_inputs)
                     vf_loss, vf_clipfrac = core_algos.compute_value_loss(

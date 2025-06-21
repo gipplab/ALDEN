@@ -138,7 +138,7 @@ class RLHFDataset(Dataset, ImageProcessMixin):
         if self.format_prompt:
             if 'doc_id' in example.keys():
                 format_prompt = self.format_prompt.strip()
-                prompt_str = "I have a {}-page document. My question is: ".format(example['doc_length']) + prompt_str
+                prompt_str = "My document contains {} pages. My question is: ".format(example['doc_length']) + prompt_str
             else:
                 format_prompt = Template(self.format_prompt.strip())
                 prompt_str = format_prompt.render(content=prompt_str)

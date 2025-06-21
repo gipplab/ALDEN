@@ -58,8 +58,8 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
         self.rank = int(os.getenv("RANK", "0"))
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
-        self.max_pixels = 4194304
-        self.min_pixels = 262144
+        self.max_pixels = config.max_pixels
+        self.min_pixels = config.min_pixels
         if config.use_torch_compile:
             self.log_probs_from_logits = torch.compile(VF.log_probs_from_logits, dynamic=True)
         else:
@@ -85,9 +85,6 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
                 multi_modal_inputs[key] = torch.cat(
                     [inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0
                 )
-                if multi_modal_inputs[key].size() == torch.Size([0]):
-                    multi_modal_inputs = {}
-                    break
 
         if self.config.padding_free:
             input_ids_rmpad, indices, *_ = unpad_input(

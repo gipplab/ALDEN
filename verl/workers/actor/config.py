@@ -86,6 +86,8 @@ class ActorConfig:
     padding_free: bool = False
     ulysses_sequence_parallel_size: int = 1
     use_torch_compile: bool = True
+    max_pixels: int = 4194304
+    min_pixels: int = 262144
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
@@ -103,6 +105,8 @@ class RefConfig:
     strategy: str = "fsdp"
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
     offload: OffloadConfig = field(default_factory=OffloadConfig)
+    max_pixels: int = 4194304
+    min_pixels: int = 262144
     """auto keys"""
     micro_batch_size_per_device_for_experience: int = field(default=-1, init=False)
     padding_free: bool = field(default=False, init=False)
