@@ -87,6 +87,7 @@ class FSDPWorker(Worker):
 
         self._use_param_offload = False
         self._use_optimizer_offload = False
+        self.freeze_visual = False
         if self._is_actor:
             self._use_param_offload = self.config.actor.offload.offload_params
             self._use_optimizer_offload = self.config.actor.offload.offload_optimizer
@@ -229,7 +230,8 @@ class FSDPWorker(Worker):
 
         if model_config.freeze_vision_tower:
             if hasattr(model, "visual"):
-                model.visual.requires_grad_(False)
+                # model.visual.requires_grad_(False)
+                self.freeze_visual = True
                 fsdp_config.use_orig_params = True
                 self.print_rank0("Vision tower is set to not trainable.")
             else:
@@ -284,10 +286,17 @@ class FSDPWorker(Worker):
         )
         print_gpu_memory_usage("After FSDP module init")
 
+        params_to_optimize = []
+        for name, param in self.fsdp_module.named_parameters():
+            if self.freeze_visual and name.startswith("visual."):
+                continue
+            if param.requires_grad:
+                params_to_optimize.append(param)
+
         if self._is_actor or self._is_critic:
             if optim_config.strategy == "adamw":
                 self.optimizer = torch.optim.AdamW(
-                    self.fsdp_module.parameters(),
+                    params_to_optimize,
                     lr=optim_config.lr,
                     betas=optim_config.betas,
                     weight_decay=optim_config.weight_decay,
@@ -295,7 +304,7 @@ class FSDPWorker(Worker):
                 )
             elif optim_config.strategy == "adamw_bf16":
                 self.optimizer = AnyPrecisionAdamW(
-                    self.fsdp_module.parameters(),
+                    params_to_optimize,
                     lr=optim_config.lr,
                     betas=optim_config.betas,
                     weight_decay=optim_config.weight_decay,

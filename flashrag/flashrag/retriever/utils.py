@@ -124,7 +124,7 @@ def load_corpus(corpus_path: str):
     if corpus_path.endswith(".jsonl"):
         corpus = datasets.load_dataset('json', data_files=corpus_path, split="train")
     elif corpus_path.endswith(".parquet"):
-        corpus = datasets.load_dataset('parquet', data_files=corpus_path, split="train")
+        corpus = datasets.load_dataset('parquet', data_files=corpus_path, split="train", num_proc=8)
         corpus = corpus.cast_column('image', datasets.Image())
     else:
         raise NotImplementedError("Corpus format not supported!")

@@ -149,7 +149,7 @@ def compute_score(solution_str, ground_truth) -> dict:
     if ground_truth is not None:
         valid_template, reason = validate_answer_action_format(response)
         if not valid_template:
-            result_score.update({"overall": 0.0,
+            result_score.update({"overall": -1.0,
                                  "format": 0.0,
                                  "accuracy": 0.0,})
                                  # "reason": f'bad format: {reason}'
@@ -168,15 +168,15 @@ def compute_score(solution_str, ground_truth) -> dict:
             try:
                 answer = remove_boxed(last_boxed_only_string(answer_part))
             except Exception as e:
-                result_score.update({"overall": 0.2,
-                        "format": 0.2,
+                result_score.update({"overall": -1.0,
+                        "format": 0.0,
                         "accuracy": 0,})
                         # "reason": f'find box error: {e}'
                 return result_score
         else:
             answer = ''
-            result_score.update({"overall": 0.1,
-                                 "format": 0.1,
+            result_score.update({"overall": -1.0,
+                                 "format": 0.0,
                                  "accuracy": 0.0,})
                                  # "reason": f'cannot extract answer'
             return result_score
@@ -184,13 +184,13 @@ def compute_score(solution_str, ground_truth) -> dict:
         f1_score = get_f1_score(answer, ground_truth)
         if f1_score > 0:
             result_score.update(
-                {"overall": f1_score * 5 + 0.4,
+                {"overall": min(f1_score * 5, 5.0),
                                  "format": 1.0,
                                  "accuracy": f1_score,})
                                  # "reason": f'correct answer, get f1 score: {f1_score}'
             return result_score
         else:
-            result_score.update({"overall": 0.4,
+            result_score.update({"overall": 0.0,
                                  "format": 1.0,
                                  "accuracy": 0.0,})
                                  # "reason": f'wrong answer but good format: {answer}'
@@ -203,11 +203,11 @@ def compute_score(solution_str, ground_truth) -> dict:
             action = 'fetch'
         if valid_template:
             result_score[action] += 1
-            result_score.update({"overall": 0.4,
+            result_score.update({"overall": 0.0,
                                  "format": 1.0,
                                  })
         else:
-            result_score.update({"overall": 0.0,
+            result_score.update({"overall": -1.0,
                                  "format": 0.0,
                                  })
 
