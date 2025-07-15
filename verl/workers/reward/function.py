@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TypedDict
 
 import torch
 from transformers import PreTrainedTokenizer
+import re
 import pydevd_pycharm
 
 from ...protocol import DataProto
@@ -108,15 +109,17 @@ class FunctionRewardManager:
                         score = self.score_fn(response_str, None)
                         acs = len(co_pid.intersection(gt_pids))
                         rps = len(co_pid.intersection(pre_pids))
-                        if score["overall"] == 0.4:
+                        if score["overall"] == 0.0:
                             if acs == 1.0 and rps == 0.0:
-                                oa = score["overall"] + 0.6
+                                oa = score["overall"] + 1.0
                             elif acs == 1.0 and rps == 1.0:
-                                oa = score["overall"] - 0.3
-                            elif acs == 0.0 and rps == 0.0:
-                                oa = score["overall"] + 0.2
+                                oa = score["overall"] - 0.5
+                            elif acs == 0.0 and rps == 0.0 and co_pid:
+                                oa = score["overall"] + 0.0
+                            elif acs == 0.0 and rps == 0.0 and not co_pid:
+                                oa = score["overall"] - 0.5
                             elif acs == 0.0 and rps == 1.0:
-                                oa = score["overall"] - 0.3
+                                oa = score["overall"] - 0.5
                         # if acs != 0 or rps != 0:
                         #     oa = (acs - rps * self.config.repetition_penalty_factor) * 0.6 + score["overall"]
                         # else:

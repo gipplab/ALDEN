@@ -19,28 +19,28 @@
 set -x
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 
-MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct  # replace it with your local file path
+MODEL_PATH=Qwen/Qwen2.5-VL-3B-Instruct  # replace it with your local file path
 WANDB_API_KEY=a3b3f7b7962a8b549c4635ee3a03944d554f1a10
 ROLLOUT_NAME=vllm_agent
 SEARCH_TOP_N=1
-SEARCH_URL=http://10.241.148.38:42354
+SEARCH_URL=http://10.241.148.34:42354
 LIMIT_IMAGES=10
 MAX_RESPONSE_LENGTH=19000
 MAX_PROMPT_LENGTH=720
 ROLLOUT_MAX_NUM_BATCHED_TOKENS=20000
 TENSOR_PARALLEL_SIZE=2
 PROJECT_NAME=EasyR1
-EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_turn-level-ppo_loss-mask-mean-advantage
+EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_action-in-front
 PROMPT_KEY=question
-ROLLOUT_BATCH_SIZE=256
+ROLLOUT_BATCH_SIZE=512
 ROLLOUT_N=1
 VAL_BATCH_SIZE=-1
-GLOBAL_BATCH_SIZE=256
+GLOBAL_BATCH_SIZE=512
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE=1
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE=16
 MAX_PIXELS=2508800
 MIN_PIXELS=261070
-MAX_TURN_NUM=5
+MAX_TURN_NUM=6
 TRAIN_DATA_PATH=/mnt/lustre-grete/usr/u15991/EasyR1/dataset/Doc_Agent/new_new_train.parquet  # your train data path here
 DEV_DATA_PATH=/mnt/lustre-grete/usr/u15991/EasyR1/dataset/Doc_Agent/new_new_val_1024.parquet
 CONFIG_PATH=/mnt/lustre-grete/usr/u15991/EasyR1/examples/config_ppo.yaml

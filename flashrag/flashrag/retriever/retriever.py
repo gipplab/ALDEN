@@ -12,7 +12,7 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flashrag.utils import get_reranker
 from flashrag.retriever.utils import load_corpus, load_docs, convert_numpy, judge_image, judge_zh
-from flashrag.retriever.encoder import Encoder, STEncoder, ClipEncoder
+from flashrag.retriever.encoder import Encoder, STEncoder, ClipEncoder, ColEncoder
 from multiprocessing.pool import ThreadPool
 import requests
 from functools import wraps
@@ -381,12 +381,74 @@ class DenseRetriever(BaseRetriever):
     def load_index(self):
         if self.index_path is None or not os.path.exists(self.index_path):
             raise Warning(f"Index file {self.index_path} does not exist!")
-        self.index = faiss.read_index(self.index_path)
-        if self.use_faiss_gpu:
-            co = faiss.GpuMultipleClonerOptions()
-            co.useFloat16 = True
-            co.shard = False
-            self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+        if not 'col' in self.retreival_model_path:
+            self.index = faiss.read_index(self.index_path)
+            if self.use_faiss_gpu:
+                co = faiss.GpuMultipleClonerOptions()
+                co.useFloat16 = True
+                co.shard = False
+                self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+        else:
+            batch_emb = np.load(self.index_path, allow_pickle=True)
+            self.collection_name = 'test'
+            qdrant_client = QdrantClient(
+                ":memory:"
+            )
+            qdrant_client.recreate_collection(
+                collection_name=self.collection_name,  # the name of the collection
+                on_disk_payload=False,  # store the payload on disk
+                optimizers_config=models.OptimizersConfigDiff(
+                    indexing_threshold=100
+                ),
+                # it can be useful to swith this off when doing a bulk upload and then manually trigger the indexing once the upload is done
+                vectors_config=models.VectorParams(
+                    size=batch_emb[0].shape[-1],
+                    distance=models.Distance.COSINE,
+                    multivector_config=models.MultiVectorConfig(
+                        comparator=models.MultiVectorComparator.MAX_SIM
+                    ),
+                    quantization_config=models.ScalarQuantization(
+                        scalar=models.ScalarQuantizationConfig(
+                            type=models.ScalarType.INT8,
+                            quantile=0.99,
+                            always_ram=True,
+                        ),
+                    ),
+                ),
+            )
+
+            batch_size = batch_emb[0].shape[0]  # Adjust based on your GPU memory constraints
+
+            # Use tqdm to create a progress bar
+            with tqdm(total=len(self.corpus), desc="Indexing Progress") as pbar:
+                k = 0
+                for i in range(0, len(self.corpus), batch_size):
+                    image_embeddings = batch_emb[k]
+                    # Prepare points for Qdrant
+                    points = []
+                    for j, embedding in enumerate(image_embeddings):
+                        # Convert the embedding to a list of vectors
+                        multivector = embedding.tolist()
+                        points.append(
+                            models.PointStruct(
+                                id=i + j,  # we just use the index as the ID
+                                vector=multivector,  # This is now a list of vectors
+                                payload={
+                                    "fid": i + j
+                                },  # can also add other metadata/data
+                            )
+                        )
+                    # Upload points to Qdrant
+                    qdrant_client.upsert(
+                        collection_name=self.collection_name,
+                        points=points,
+                        wait=False,
+                    )
+                    # Update the progress bar
+                    pbar.update(batch_size)
+                    k += 1
+            self.index = qdrant_client
+        print("Indexing complete!")
 
     
     def update_additional_setting(self):
@@ -405,6 +467,15 @@ class DenseRetriever(BaseRetriever):
             self.encoder = STEncoder(
                 model_name = self.retrieval_method,
                 model_path = self._config["retrieval_model_path"],
+                max_length = self.query_max_length,
+                use_fp16 = self.use_fp16,
+                instruction = self.instruction,
+            )
+        elif 'col' in self.retrieval_method:
+            self.encoder = ColEncoder(
+                model_name = self.retrieval_method,
+                model_path = self._config["retrieval_model_path"],
+                pooling_method = self.pooling_method,
                 max_length = self.query_max_length,
                 use_fp16 = self.use_fp16,
                 instruction = self.instruction,
@@ -463,41 +534,79 @@ class DenseRetriever(BaseRetriever):
         return results
 
     def _batch_search(self, query: List[str], id: List[str], num: int = None, return_score=False):
-        ### pydevd_pycharm.settrace('47.76.117.131', port=47509, stdoutToServer=True, stderrToServer=True)
+        # pydevd_pycharm.settrace('47.83.127.143', port=47509, stdoutToServer=True, stderrToServer=True)
         if isinstance(query, str):
             query = [query]
         if num is None:
             num = self.topk
-        batch_size = self.batch_size
-
-        results = []
-        scores = []
-
+        batch_size = len(query)
         pool = ThreadPool(batch_size)
 
-        def single_search(query_emb, d_id, k=num):
-            idx_range = self.id2idx[d_id]
-            sel = faiss.IDSelectorRange(idx_range[0], idx_range[1])
-            params = faiss.SearchParameters(sel=sel)
-            return self.index.search(query_emb, k=k, params=params)
+        if 'col' not in self.retrieval_method:
 
-        # emb = self.encoder.encode(query, batch_size=batch_size, is_query=True)
-        print("Begin faiss searching...")
-        query_emb = self.encoder.encode(query)
-        tri_results = pool.starmap(single_search, [(np.expand_dims(a_query, 0), a_doc_id) for a_query, a_doc_id in zip(query_emb, id)])
-        # scores, idxs = self.index.search(emb, k=num)
-        scores = [res[0] for res in tri_results]
-        scores = np.concatenate(scores, axis=0)
-        idxs = [res[1] for res in tri_results]
-        idxs = np.concatenate(idxs, axis=0)
-        # scores, idxs = tri_results
-        print("End faiss searching")
-        scores = scores.tolist()
-        idxs = idxs.tolist()
+            def single_search(query_emb, d_id, k):
+                idx_range = self.id2idx[d_id]
+                sel = faiss.IDSelectorRange(idx_range[0], idx_range[1])
+                params = faiss.SearchParameters(sel=sel)
+                return self.index.search(query_emb, k=k, params=params)
 
+            # emb = self.encoder.encode(query, batch_size=batch_size, is_query=True)
+            print("Begin faiss searching...")
+            query_emb = self.encoder.encode(query)
+            tri_results = pool.starmap(single_search, [(np.expand_dims(a_query, 0), a_doc_id, num) for a_query, a_doc_id in zip(query_emb, id)])
+            # scores, idxs = self.index.search(emb, k=num)
+            scores = [res[0] for res in tri_results]
+            scores = np.concatenate(scores, axis=0)
+            idxs = [res[1] for res in tri_results]
+            idxs = np.concatenate(idxs, axis=0)
+            # scores, idxs = tri_results
+            print("End faiss searching")
+            scores = scores.tolist()
+            idxs = idxs.tolist()
+        else:
+            def single_search(query_emb, d_id, k):
+                idx_range = self.id2idx[d_id]
+                query_emb = query_emb.tolist()
+                range_filter = models.Filter(
+                    must=[models.FieldCondition(
+                    key="fid",
+                    range=models.Range(
+                        gt=None,
+                        gte=idx_range[0],
+                        lt=idx_range[1],
+                        lte=None,
+                    ),
+                )]
+                )
+                # range_filter = Filter(**{
+                #     "must": [{
+                #         "key": "id",  # Store city information in a field of the same name
+                #         "range": {  # This condition checks if payload field has the requested value
+                #             "gt": None,
+                #             "gte": idx_range[0],
+                #             "lt": idx_range[1],
+                #             "lte": None
+                #         }
+                #     }]
+                # })
+                search_result = self.index.query_points(
+                    collection_name=self.collection_name,
+                    query_filter=range_filter,
+                    query=query_emb, limit=k, timeout=60
+                )
+                return search_result.points
+
+            print("Begin qdrant searching...")
+            query_emb = self.encoder.encode(query, is_query=True)
+            tri_results = pool.starmap(single_search, [(a_query, a_doc_id, num) for a_query, a_doc_id in
+                                                       zip(query_emb, id)])
+            # scores, idxs = self.index.search(emb, k=num)
+            scores = [[pts.score for pts in res] for res in tri_results]
+            idxs = [[pts.id for pts in res] for res in tri_results]
+            print("End qdrant searching")
         flat_idxs = sum(idxs, [])
         results = load_docs(self.corpus, flat_idxs)
-        results = [results[i * num : (i + 1) * num] for i in range(len(idxs))]
+        results = [results[i * num: (i + 1) * num] for i in range(len(idxs))]
 
         if return_score:
             return results, scores

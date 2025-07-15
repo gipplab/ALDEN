@@ -15,7 +15,7 @@
 FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
-
+import json
 import os
 import uuid
 from collections import defaultdict
@@ -305,6 +305,12 @@ class RayPPOTrainer:
         rng.shuffle(samples)
 
         samples = samples[:100]
+        example_path = os.path.join(self.config.trainer.save_checkpoint_path, "generation_examples")
+        if not os.path.exists(example_path):
+            os.makedirs(example_path, exist_ok=True)
+        with open(example_path + str(self.global_step) + '.txt', 'w') as f:
+            for e in samples:
+                f.write(json.dumps(e) + '\n\n\n')
         self.logger.log_generation(samples, self.global_step)
 
     def _validate(self) -> Dict[str, Any]:
@@ -344,7 +350,7 @@ class RayPPOTrainer:
 
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=False) for ids in output_ids]
             sample_outputs.extend(output_texts)
             sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
             test_batch = test_batch.union(test_output_gen_batch)

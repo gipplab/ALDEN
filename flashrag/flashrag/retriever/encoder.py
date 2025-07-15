@@ -6,6 +6,8 @@ import numpy as np
 from tqdm import tqdm
 from flashrag.retriever.utils import load_model, pooling, parse_query, parse_image
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+from transformers.utils.import_utils import is_flash_attn_2_available
 from PIL import Image
 import torch
 import math
@@ -77,6 +79,59 @@ class Encoder:
         for i in tqdm(range(0, len(query_list), batch_size), desc="Encoding process: "):
             query_emb.append(self.single_batch_encode(query_list[i : i + batch_size], is_query))
         query_emb = np.concatenate(query_emb, axis=0)
+        return query_emb
+
+    @torch.inference_mode()
+    def multi_gpu_encode(self, query_list: Union[List[str], str], batch_size=64, is_query=True) -> np.ndarray:
+        if self.gpu_num > 1:
+            self.model = torch.nn.DataParallel(self.model)
+        query_emb = self.encode(query_list, batch_size, is_query)
+        return query_emb
+
+
+class ColEncoder:
+    """
+    Encoder class for encoding queries using a specified model.
+
+    Attributes:
+        model_name (str): The name of the model.
+        model_path (str): The path to the model.
+        pooling_method (str): The method used for pooling.
+        max_length (int): The maximum length of the input sequences.
+        use_fp16 (bool): Whether to use FP16 precision.
+        instruction (str): Additional instructions for parsing queries.
+
+    Methods:
+        encode(query_list: List[str], is_query=True) -> np.ndarray:
+            Encodes a list of queries into embeddings.
+    """
+
+    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16, instruction):
+        self.model_name = model_name
+        self.model_path = model_path
+        self.pooling_method = pooling_method
+        self.max_length = max_length
+        self.use_fp16 = use_fp16
+        self.instruction = instruction
+        self.gpu_num = torch.cuda.device_count()
+        self.model = ColQwen2_5.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            device_map="cuda:0",  # or "mps" if on Apple Silicon
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
+        ).eval()
+        self.tokenizer = ColQwen2_5_Processor.from_pretrained(model_path)
+
+    @torch.inference_mode()
+    def encode(self, query_list: List[str], batch_size=64, is_query=False, modal=None) -> np.ndarray:
+        if is_query:
+            query_batch = self.tokenizer.process_queries(query_list).to(self.model.device)
+        else:
+            query_batch = self.tokenizer.process_images(query_list).to(self.model.device)
+
+        query_emb = self.model(**query_batch)
+        query_emb = query_emb.detach().to(torch.float).cpu().numpy()
+        query_emb = query_emb.astype(np.float32, order="C")
         return query_emb
 
     @torch.inference_mode()

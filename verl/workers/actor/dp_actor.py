@@ -275,8 +275,8 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
                     response_length = responses.size(1)
                     attention_mask = model_inputs["attention_mask"]
                     response_mask = attention_mask[:, -response_length:]
-                    if 'loss_mask' in data:
-                        response_mask = data['loss_mask']
+                    if 'loss_mask' in data.batch:
+                        response_mask = model_inputs['loss_mask']
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
 
@@ -301,7 +301,7 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
                             ref_log_probs=ref_log_probs,
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_loss = VF.masked_mean(kld, response_mask)
+                        kl_loss = VF.masked_mean(kld, attention_mask[:, -response_length:])
                         pg_loss = pg_loss + kl_loss * self.config.kl_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef

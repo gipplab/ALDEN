@@ -14,6 +14,7 @@ from tqdm import tqdm
 from flashrag.retriever.utils import load_model, load_corpus, pooling, set_default_instruction, judge_zh
 import pydevd_pycharm
 from PIL import Image
+from colpali_engine.compression.token_pooling import HierarchicalTokenPooler
 Image.MAX_IMAGE_PIXELS = 1000000000
 
 
@@ -222,16 +223,19 @@ class Index_Builder:
         return all_embeddings
 
     def _save_embedding(self, all_embeddings):
-        memmap = np.memmap(self.embedding_save_path, shape=all_embeddings.shape, mode="w+", dtype=all_embeddings.dtype)
-        length = all_embeddings.shape[0]
-        # add in batch
-        save_batch_size = 10000
-        if length > save_batch_size:
-            for i in tqdm(range(0, length, save_batch_size), leave=False, desc="Saving Embeddings"):
-                j = min(i + save_batch_size, length)
-                memmap[i:j] = all_embeddings[i:j]
+        if not 'col' in self.model_path:
+            memmap = np.memmap(self.embedding_save_path, shape=all_embeddings.shape, mode="w+", dtype=all_embeddings.dtype)
+            length = all_embeddings.shape[0]
+            # add in batch
+            save_batch_size = 10000
+            if length > save_batch_size:
+                for i in tqdm(range(0, length, save_batch_size), leave=False, desc="Saving Embeddings"):
+                    j = min(i + save_batch_size, length)
+                    memmap[i:j] = all_embeddings[i:j]
+            else:
+                memmap[:] = all_embeddings
         else:
-            memmap[:] = all_embeddings
+            np.save(self.embedding_save_path, all_embeddings)
 
     def encode_all(self):
         encode_data = [item["contents"] for item in self.corpus]
@@ -261,8 +265,27 @@ class Index_Builder:
                 for i in tqdm(range(0, len(self.corpus), self.batch_size), desc="Encoding process: "):
                     all_embeddings.append(self.encoder.encode(self.corpus[i : i + self.batch_size][modal], batch_size=self.batch_size, modal=modal))
                 # all_embeddings = self.encoder.encode(self.corpus, batch_size=self.batch_size, modal=modal)
-            modal_dict[modal] = np.concatenate(all_embeddings, axis=0)
-
+                # if 'col' in self.model_path:
+                #     token_len_list = []
+                #     pooled_all_embeddings = []
+                #     for emb in all_embeddings:
+                #         token_len_list.append(emb.shape[1])
+                #     min_token_len = min(token_len_list)
+                #     token_pooler = HierarchicalTokenPooler(pool_factor=min_token_len)
+                #     for emb in tqdm(all_embeddings):
+                #         pooled_all_embeddings.append(
+                #             token_pooler.pool_embeddings(
+                #                 emb,
+                #                 pool_factor=min_token_len,
+                #                 padding=True,
+                #                 padding_side=self.encoder.tokenizer.tokenizer.padding_side,
+                #             )
+                #         )
+                #     all_embeddings = pooled_all_embeddings
+            if 'col' not in self.model_path:
+                modal_dict[modal] = np.concatenate(all_embeddings, axis=0)
+            else:
+                modal_dict[modal] = np.array(all_embeddings, dtype=object)
         all_embeddings = np.concatenate(list(modal_dict.values()), axis=0)
         return all_embeddings
 
@@ -292,6 +315,18 @@ class Index_Builder:
                 instruction=self.instruction,
             )
             hidden_size = self.encoder.model.get_sentence_embedding_dimension()
+        elif 'col' in self.model_path:
+            from flashrag.retriever.encoder import ColEncoder
+
+            self.encoder = ColEncoder(
+                model_name=self.retrieval_method,
+                model_path=self.model_path,
+                pooling_method=self.pooling_method,
+                max_length=self.max_length,
+                use_fp16=self.use_fp16,
+                instruction=self.instruction,
+            )
+            hidden_size = self.encoder.model.dim
         else:
             from flashrag.retriever.encoder import Encoder
 
@@ -309,7 +344,7 @@ class Index_Builder:
             corpus_size = len(self.corpus)
             all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
         else:
-            all_embeddings = self.encode_all_clip() if self.is_clip or self.retrieval_method == 'vdr-2b-v1' else self.encode_all()
+            all_embeddings = self.encode_all_clip() if self.is_clip or self.retrieval_method == 'vdr-2b-v1' or "col" in self.model_path else self.encode_all()
             if self.save_embedding:
                 self._save_embedding(all_embeddings)
             del self.corpus
@@ -335,10 +370,11 @@ class Index_Builder:
                 )
                 self.save_faiss_index(all_embeddings, self.faiss_type, self.index_save_path)
         else:
-            self.index_save_path = os.path.join(self.save_dir, f"{self.retrieval_method}_{self.faiss_type}.index")
-            if os.path.exists(self.index_save_path):
-                print("The index file already exists and will be overwritten.")
-            self.save_faiss_index(all_embeddings, self.faiss_type, self.index_save_path)
+            if not 'col' in self.model_path:
+                self.index_save_path = os.path.join(self.save_dir, f"{self.retrieval_method}_{self.faiss_type}.index")
+                if os.path.exists(self.index_save_path):
+                    print("The index file already exists and will be overwritten.")
+                self.save_faiss_index(all_embeddings, self.faiss_type, self.index_save_path)
         print("Finish!")
 
     def save_faiss_index(
@@ -395,7 +431,7 @@ def main():
     parser.add_argument("--index_modal", type=str, default="all", choices=["text", "image", "all"])
 
     args = parser.parse_args()
-    # pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
+    # pydevd_pycharm.settrace('47.83.127.143', port=47508, stdoutToServer=True, stderrToServer=True)
 
     index_builder = Index_Builder(
         retrieval_method=args.retrieval_method,

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=EasyR1-qwen2p5VL-7b-DocAgent
-#SBATCH --nodes=5
+#SBATCH --nodes=4
 #SBATCH --mem=450G
 #SBATCH --mail-user=tianyu.yang@uni-goettingen.de
 #SBATCH --mail-type=all

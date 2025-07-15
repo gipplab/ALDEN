@@ -15,6 +15,7 @@
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Union
+import re
 
 import numpy as np
 import torch
@@ -234,12 +235,12 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
         self.image_token_id = tokenizer.encode(processor.image_token)[0]
         self.image_start_id = tokenizer.encode("<|vision_start|>")[0]
         self.image_end_id = tokenizer.encode("<|vision_end|>")[0]
-        self.result_prefix_ids = self.tokenizer.encode("<|im_start|>user\n<result>")
+        self.result_prefix_ids = self.tokenizer.encode("\n<|im_start|>user\n<result>")
         self.result_suffix_ids = self.tokenizer.encode("</result><|im_end|>\n<|im_start|>assistant\n")
         self.top_n = config.top_n
         self.max_pixels = config.max_pixels
         self.min_pixels = config.min_pixels
-        self.vllm_image_limit = 15
+        self.vllm_image_limit = config.limit_images
         self.max_turn_num = config.max_turn_num
 
     @retry(max=5, sleep=1)
@@ -440,7 +441,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                     stop_reason = outputs[i].stop_reason
 
                     if finish_reason == 'stop' and stop_reason is None:
-                        if outputs[i].text.endswith('</search>'):
+                        if '<search>' in outputs[i].text and '</search>' in outputs[i].text:
                             search_content = self.extract_search_content(outputs[i].text)
                             search_queries.append(search_content)
                             search_indices.append(idx)
@@ -452,7 +453,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             result_ids_list[idx] += output_ids
                             result_attention_mask[idx] += [1] * len(output_ids)
                             turn_sequence_mask[idx] += [turn_idx] * len(output_ids)
-                        elif outputs[i].text.endswith('</fetch>'):
+                        elif '<fetch>' in outputs[i].text and '</fetch>' in outputs[i].text:
                             fetch_content = self.extract_fetch_content(outputs[i].text)
                             fetch_queries.append(fetch_content)
                             fetch_indices.append(idx)
@@ -570,7 +571,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 if len(result_image_list[ai]['data']) == 0:
                     padding_indices.append(ai)
             if len(padding_indices) > 0:
-                padding_results = [[Image.open('/mnt/vast-standard/home/yang28/u13688/EasyR1/assets/padding_image.jpg')]] * len(padding_indices)
+                padding_results = [[Image.new('RGB', (150, 150), 'white')]] * len(padding_indices)
                 padding_results_str = [[base64.b64encode(image_to_bytes(padding_results[0][0])).decode("utf-8")]] * len(padding_indices)
                 padding_page_ids = [['0']] * len(padding_indices)
                 for idx, result, p_id, result_str in zip(padding_indices, padding_results, padding_page_ids, padding_results_str):
@@ -680,6 +681,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
         loss_mask = result_mask * response_mask
         non_tensor_batch['page_ids'] = np.array(page_numbers_list, dtype=object)
         non_tensor_batch['doc_id'] = np.array(doc_ids, dtype=object)
+        # pydevd_pycharm.settrace('47.83.127.143', port=47508, stdoutToServer=True, stderrToServer=True)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
