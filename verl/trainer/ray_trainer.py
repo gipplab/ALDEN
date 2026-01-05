@@ -304,7 +304,7 @@ class RayPPOTrainer:
         rng = np.random.RandomState(42)
         rng.shuffle(samples)
 
-        samples = samples[:100]
+        samples = samples[:10]
         example_path = os.path.join(self.config.trainer.save_checkpoint_path, "generation_examples")
         if not os.path.exists(example_path):
             os.makedirs(example_path, exist_ok=True)

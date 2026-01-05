@@ -28,6 +28,12 @@ class RewardConfig:
     skip_special_tokens: bool = True
     multi_turn_rewards: bool = False
     repetition_penalty_factor: float = 1.5
+    ndcg_k: int = 5
+    lambda_action_repetition_penalty: float = 1.5
+    recall_ocr: bool = False
+    mm_fetch: bool = False
+    search_query_repetition_penalty: bool = False
+    usage_top_n: int = 1
     """auto keys"""
     score_function_name: Optional[str] = field(default=None, init=False)
 

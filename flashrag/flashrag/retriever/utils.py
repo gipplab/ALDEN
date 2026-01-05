@@ -9,6 +9,8 @@ import langid
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 from datasets import concatenate_datasets
 from tqdm import tqdm
+import torch
+from transformers.utils.import_utils import is_flash_attn_2_available
 
 def convert_numpy(obj: Union[Dict, list, np.ndarray, np.generic]) -> Any:
     """Recursively convert numpy objects in nested dictionaries or lists to native Python types."""
@@ -63,6 +65,41 @@ def load_model(model_path: str, use_fp16: bool = False):
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True, trust_remote_code=True)
 
     return model, tokenizer
+
+def load_col_model(model_path: str, model_name: str, device: str = 'cuda'):
+    if model_path == "vidore/colqwen2-v1.0":
+        from colpali_engine.models import ColQwen2, ColQwen2Processor
+        model = ColQwen2.from_pretrained(
+            "vidore/colqwen2-v1.0",
+            torch_dtype=torch.bfloat16,
+            device_map=device,  # or "mps" if on Apple Silicon
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
+        ).eval()
+        processor = ColQwen2Processor.from_pretrained("vidore/colqwen2-v1.0")
+    elif model_path == "vidore/colqwen2-v1.0":
+        from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+        model = ColQwen2_5.from_pretrained(
+            "vidore/colqwen2.5-v0.2",
+            torch_dtype=torch.bfloat16,
+            device_map=device,  # or "mps" if on Apple Silicon
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
+        ).eval()
+        processor = ColQwen2_5_Processor.from_pretrained("vidore/colqwen2.5-v0.2")
+    elif model_path == "vidore/colpali-v1.3":
+        from colpali_engine.models import ColPali, ColPaliProcessor
+        model = ColPali.from_pretrained(
+            "vidore/colpali-v1.3",
+            torch_dtype=torch.bfloat16,
+            device_map=device,  # or "mps" if on Apple Silicon
+        ).eval()
+        processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.3")
+    elif "colbert" in model_name:
+        from pylate import indexes, models, retrieve
+        model = models.ColBERT(
+            model_name_or_path=model_path,
+        )
+        processor = None
+    return model, processor
 
 
 def pooling(pooler_output, last_hidden_state, attention_mask=None, pooling_method="mean"):

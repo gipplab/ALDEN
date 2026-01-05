@@ -49,6 +49,7 @@ class DataConfig:
     max_pixels: int = 4194304
     min_pixels: int = 262144
     filter_overlong_prompts: bool = True
+    recall_ocr: bool = False
 
     def post_init(self):
         if self.format_prompt is not None:
@@ -125,6 +126,11 @@ class PPOConfig:
         self.worker.rollout.min_pixels = self.data.min_pixels
         self.worker.ref.max_pixels = self.data.max_pixels
         self.worker.ref.min_pixels = self.data.min_pixels
+        self.worker.reward.recall_ocr = self.worker.rollout.recall_ocr
+        self.worker.reward.mm_fetch = self.worker.rollout.mm_fetch
+        self.data.recall_ocr = self.worker.rollout.recall_ocr
+        self.worker.reward.ndcg_k = self.worker.rollout.top_n
+        self.worker.reward.usage_top_n = self.worker.rollout.usage_top_n
 
     def deep_post_init(self):
         recursive_post_init(self)

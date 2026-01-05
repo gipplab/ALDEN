@@ -1,13 +1,18 @@
 # ------------------------------------------------Environment Settings------------------------------------------------#
-gpu_id: "0,1,2,3,4,5,6,7"
+gpu_id: "0"
 
 # -------------------------------------------------Retrieval Settings------------------------------------------------#
 # If set the name, the model path will be find in global paths
-retrieval_method: "llamaindex/vdr-2b-v1"  # name or path of the retrieval model.
-index_path: "/scratch-scc/projects/scc_ulsb_fe/yang/images_index/vdr-2b-v1_Flat.index" # path to the indexed file
+retrieval_method: "vdr-2b-v1"  # name or path of the retrieval model.
+retrieval_model_path: "llamaindex/vdr-2b-v1"
+index_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_image_index_latest/train_val/vdr-2b-v1_Flat.index" # path to the indexed file
 faiss_gpu: False # whether use gpu to hold index
-corpus_path: "/scratch-scc/projects/scc_ulsb_fe/yang/images_corpus/images.parquet"  # path to corpus in '.jsonl' format that store the documents
+corpus_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_hybrid_corpus_latest/train_val/images.parquet"  # path to corpus in '.jsonl' format that store the documents
 use_sentence_transformer: True
+ocr_use_sentence_transformer: True
+ocr_index_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_text_index_latest/train_val/gte-qwen2-1.5b-instruct_Flat.index"
+ocr_retrieval_method: "gte-Qwen2-1.5B-instruct"  # name or path of the retrieval model.
+ocr_retrieval_model_path: "Alibaba-NLP/gte-Qwen2-1.5B-instruct "
 
 
 

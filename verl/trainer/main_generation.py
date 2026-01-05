@@ -90,6 +90,7 @@ def main_task(config: GenerationConfig):
     output_lst = [[] for _ in range(config.worker.rollout.n)]
     final_answer_lst = [[] for _ in range(config.worker.rollout.n)]
     retrieved_page_lst = [[] for _ in range(config.worker.rollout.n)]
+    token_consumption_lst = [[] for _ in range(config.worker.rollout.n)]
 
     for batch_idx, batch_dict in enumerate(tqdm(dataloader)):
         data = DataProto.from_single_dict(batch_dict)
@@ -104,6 +105,7 @@ def main_task(config: GenerationConfig):
             output_texts = []
             final_answers = []
             retrieved_pages = []
+            token_consumption = []
 
             # pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
             for i in range(len(output)):
@@ -112,6 +114,8 @@ def main_task(config: GenerationConfig):
                 valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum()
                 valid_response_ids = data_item.batch['responses'][:valid_response_length]
                 page_number = data_item.non_tensor_batch['page_ids']
+                tc = data_item.non_tensor_batch['token_consumption']
+                token_consumption.append(tc)
                 retrieved_pages.append(page_number)
                 response_str = tokenizer.decode(valid_response_ids, skip_special_tokens=True)
                 output_texts.append(response_str)
@@ -129,6 +133,7 @@ def main_task(config: GenerationConfig):
             output_lst[n_sample].extend(output_texts)
             final_answer_lst[n_sample].extend(final_answers)
             retrieved_page_lst[n_sample].extend(retrieved_pages)
+            token_consumption_lst[n_sample].extend(token_consumption)
 
     # convert output_lst from (n_samples, n_data) to (n_data, n_sampels)
     output_lst = np.array(output_lst, dtype=object)
@@ -137,6 +142,8 @@ def main_task(config: GenerationConfig):
     final_answer_lst = np.transpose(final_answer_lst, axes=(1, 0)).tolist()
     retrieved_page_lst = np.array(retrieved_page_lst, dtype=object)
     retrieved_page_lst = np.transpose(retrieved_page_lst, axes=(1, 0)).tolist()
+    token_consumption_lst = np.array(token_consumption_lst)
+    token_consumption_lst = np.transpose(token_consumption_lst, axes=(1, 0)).tolist()
     eval_answer_lst = [ans[0] for ans in final_answer_lst]
 
     # add to the data frame
@@ -150,6 +157,8 @@ def main_task(config: GenerationConfig):
     os.makedirs(output_dir, exist_ok=True)
     result_dataset_list = datasets.Dataset.from_pandas(result_dataset).to_list()
     json.dump(result_dataset_list, open(os.path.join(output_dir, os.path.split(config.data.test_files)[1].replace('.parquet', '.json')), 'w'))
+    json.dump(retrieved_page_lst, open(os.path.join(output_dir, 'retrieved_page_lst.json'), 'w'))
+    json.dump(token_consumption_lst, open(os.path.join(output_dir, 'token_consumption.json'), 'w'))
 
 
 def main():
