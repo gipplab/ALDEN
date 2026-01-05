@@ -229,7 +229,7 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "ocr_mask"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
         if 'loss_mask' in data.batch:
@@ -275,10 +275,12 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
                     response_length = responses.size(1)
                     attention_mask = model_inputs["attention_mask"]
                     response_mask = attention_mask[:, -response_length:]
+                    assert 'loss_mask' in data.batch #debug
                     if 'loss_mask' in data.batch:
                         response_mask = model_inputs['loss_mask']
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
+                    ocr_mask = model_inputs["ocr_mask"]
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
@@ -301,9 +303,11 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
                             ref_log_probs=ref_log_probs,
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_loss = VF.masked_mean(kld, attention_mask[:, -response_length:])
-                        pg_loss = pg_loss + kl_loss * self.config.kl_coef
-                        metrics["actor/kl_loss"] = kl_loss.detach().item()
+                        act_kl_loss = VF.masked_mean(kld, response_mask)
+                        obs_kl_loss = VF.masked_mean(kld, attention_mask[:, -response_length:] - response_mask - ocr_mask)
+                        pg_loss = pg_loss + act_kl_loss * self.config.kl_coef + obs_kl_loss * self.config.kl_coef * 10
+                        metrics["actor/act_kl_loss"] = act_kl_loss.detach().item()
+                        metrics["actor/obs_kl_loss"] = obs_kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
 
                     loss = pg_loss / gradient_accumulation

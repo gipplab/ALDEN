@@ -1,44 +1,129 @@
-# RAVQA
+# ALDEN: Agentic Long-document Document Intelligence
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/hiyouga/EasyR1)](https://github.com/hiyouga/EasyR1/stargazers)
-[![Twitter](https://img.shields.io/twitter/follow/llamafactory_ai)](https://twitter.com/llamafactory_ai)
+**ALDEN** is a multi-modal reinforcement learning framework designed for **Agentic Visually-Rich Document Understanding (A-VRDU)**. Built upon [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL), it introduces a novel **fetch** action, cross-level reward and a visual semantic anchoring mechanism to enable efficient navigation and reasoning over long, high-resolution documents.
 
-## Document VQA
+This repository contains the official implementation of our paper: **[ALDEN: Reinforcement Learning for Active Navigation and Evidence Gathering in Long Documents.](https://arxiv.org/pdf/2510.25668)**.
 
-### Dataset Preprocessing
+## 🛠️ Installation
 
-#### Corpus Building
+Bash
 
-Change the raw data path and the target path in `rag_serving/build_corpus.py`
+```
+conda create -n alden python=3.10
+conda activate alden
+pip install -r requirements.txt
+```
 
-```shell
+## 📂 Dataset Preprocessing
+
+### 1. Corpus Building
+
+We provide the processed training corpus on Hugging Face: **[SkyFishQ/ALDEN](https://www.google.com/search?q=https://huggingface.co/SkyFishQ/ALDEN)**.
+
+If you wish to build the corpus from scratch using your own data:
+
+1. Modify the `raw_data_path` and `target_path` in `rag_serving/build_corpus.py`.
+2. Run the build script:
+
+```bash
 python rag_serving/build_corpus.py
 ```
 
-#### Image Index Building
+### 2. Image Index Building
 
-```shell
-python index_builder.py --retrieval_method vdr-2b-v1 --model_path llamaindex/vdr-2b-v1 --corpus_path /scratch-scc/projects/scc_ulsb_fe/yang/images_corpus/images.parquet --save_dir /scratch-scc/projects/scc_ulsb_fe/yang/images_index --max_length 512 --batch_size 128 --faiss_type Flat --index_modal image --sentence_transformer  --save_embedding
+We use `flashrag` to build the dense retrieval index for document images.
+
+```bash
+cd ./flashrag/flashrag/retriever
+
+python index_builder.py \
+    --retrieval_method vdr-2b-v1 \
+    --model_path llamaindex/vdr-2b-v1 \
+    --corpus_path /path/to/your/images_corpus/images.parquet \
+    --save_dir /path/to/save/images_index \
+    --max_length 512 \
+    --batch_size 128 \
+    --faiss_type Flat \
+    --index_modal image \
+    --sentence_transformer \
+    --save_embedding
 ```
 
-### Launch RL
+*Note: Please replace `/path/to/your/...` with your actual file paths.*
 
-#### Tool Environment Serving
+## 🚀 Launch RL Training
 
-1. Get the IP address of the server
+ALDEN uses a decoupled architecture where the environment (RAG tools) and the agent (RL training) run separately.
 
-    ```shell
+### Step 1: Tool Environment Serving
+
+First, launch the RAG environment server which handles the `<search>` and `<fetch>` actions.
+
+1. **Get the Server IP:**
+
+    ```bash
     hostname --ip-address
     ```
 
-2. Start serving
+    *Take note of this IP address, you will need to configure it in the training script.*
 
-    ```shell
-    python rag_serving/serving.py --config rag_serving/serving_config.yaml --num_retriever 4 --port 42354
+2. **Start the Service:**
+
+    ```bash
+    python rag_serving/serving.py \
+        --config rag_serving/serving_config.yaml \
+        --num_retriever 4 \
+        --port 42354
     ```
 
-#### RL Training
+### Step 2: RL Training
 
+Once the tool server is running, start the PPO/GRPO training. Ensure the server URL in the training script points to the IP obtained in Step 1.
 
+```bash
+bash examples/baselines/qwen2_5_vl_7b_doc_agent_ppo.sh
+```
 
-## General VQA
+## ⚡ Inference
+
+To run inference on test sets:
+
+```bash
+bash examples/baselines/qwen2_5_vl_7b_doc_agent_generation.sh
+```
+
+## 💾 Model Utils
+
+### Merge LoRA Adapters
+
+To merge the trained LoRA adapters with the base model into a standard Hugging Face format:
+
+```bash
+python3 scripts/model_merger.py \
+    --local_dir checkpoints/easy_r1/exp_name/global_step_1/actor \
+    --output_dir checkpoints/merged_model
+```
+
+## 📜 Citation
+
+If you find this project useful, please cite our paper:
+
+```
+@article{yang2025alden,
+  title={ALDEN: Reinforcement Learning for Active Navigation and Evidence Gathering in Long Documents},
+  author={Yang, Tianyu and Ruas, Terry and Tian, Yijun and Wahle, Jan Philip and Kurzawe, Daniel and Gipp, Bela},
+  journal={arXiv preprint arXiv:2510.25668},
+  year={2025}
+}
+```
+
+## 🙌 Acknowledgements
+
+This work is built upon the following excellent open-source projects:
+
+- [EasyR1](https://github.com/hiyouga/EasyR1): For the RL infrastructure.
+- [VAGEN](https://github.com/mll-lab-nu/VAGEN): For visual agent baselines.
+- [verl](https://github.com/volcengine/verl): For efficient RL training.
+- [ReCall](https://github.com/Agent-RL/ReCall): For RAG integration concepts.
+
+We greatly appreciate their valuable contributions to the community.

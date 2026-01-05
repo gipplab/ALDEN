@@ -14,7 +14,8 @@ from tqdm import tqdm
 from flashrag.retriever.utils import load_model, load_corpus, pooling, set_default_instruction, judge_zh
 import pydevd_pycharm
 from PIL import Image
-from colpali_engine.compression.token_pooling import HierarchicalTokenPooler
+from torch.nn.utils.rnn import pad_sequence
+# from colpali_engine.compression.token_pooling import HierarchicalTokenPooler
 Image.MAX_IMAGE_PIXELS = 1000000000
 
 
@@ -223,19 +224,19 @@ class Index_Builder:
         return all_embeddings
 
     def _save_embedding(self, all_embeddings):
-        if not 'col' in self.model_path:
-            memmap = np.memmap(self.embedding_save_path, shape=all_embeddings.shape, mode="w+", dtype=all_embeddings.dtype)
-            length = all_embeddings.shape[0]
-            # add in batch
-            save_batch_size = 10000
-            if length > save_batch_size:
-                for i in tqdm(range(0, length, save_batch_size), leave=False, desc="Saving Embeddings"):
-                    j = min(i + save_batch_size, length)
-                    memmap[i:j] = all_embeddings[i:j]
-            else:
-                memmap[:] = all_embeddings
+        # if not 'col' in self.model_path:
+        # pydevd_pycharm.settrace('127.0.0.1', port=47508, stdout_to_server=True, stderr_to_server=True)
+        memmap = np.memmap(self.embedding_save_path, shape=all_embeddings.shape, mode="w+", dtype=all_embeddings.dtype)
+        json.dump(all_embeddings.shape, open(os.path.join(os.path.dirname(self.embedding_save_path), 'shape_' + self.retrieval_method + '.json'), 'w'))
+        length = all_embeddings.shape[0]
+        # add in batch
+        save_batch_size = 10000
+        if length > save_batch_size:
+            for i in tqdm(range(0, length, save_batch_size), leave=False, desc="Saving Embeddings"):
+                j = min(i + save_batch_size, length)
+                memmap[i:j] = all_embeddings[i:j]
         else:
-            np.save(self.embedding_save_path, all_embeddings)
+            memmap[:] = all_embeddings
 
     def encode_all(self):
         encode_data = [item["contents"] for item in self.corpus]
@@ -264,28 +265,15 @@ class Index_Builder:
                 all_embeddings = []
                 for i in tqdm(range(0, len(self.corpus), self.batch_size), desc="Encoding process: "):
                     all_embeddings.append(self.encoder.encode(self.corpus[i : i + self.batch_size][modal], batch_size=self.batch_size, modal=modal))
-                # all_embeddings = self.encoder.encode(self.corpus, batch_size=self.batch_size, modal=modal)
-                # if 'col' in self.model_path:
-                #     token_len_list = []
-                #     pooled_all_embeddings = []
-                #     for emb in all_embeddings:
-                #         token_len_list.append(emb.shape[1])
-                #     min_token_len = min(token_len_list)
-                #     token_pooler = HierarchicalTokenPooler(pool_factor=min_token_len)
-                #     for emb in tqdm(all_embeddings):
-                #         pooled_all_embeddings.append(
-                #             token_pooler.pool_embeddings(
-                #                 emb,
-                #                 pool_factor=min_token_len,
-                #                 padding=True,
-                #                 padding_side=self.encoder.tokenizer.tokenizer.padding_side,
-                #             )
-                #         )
-                #     all_embeddings = pooled_all_embeddings
-            if 'col' not in self.model_path:
-                modal_dict[modal] = np.concatenate(all_embeddings, axis=0)
+            if 'col' in self.retrieval_method:
+                all_embeddings_np = []
+                for emb_np in all_embeddings:
+                    all_embeddings_np.extend(list(emb_np))
+                all_embeddings_pt = [torch.from_numpy(emb) for emb in all_embeddings_np]
+                all_embeddings_pd = pad_sequence(all_embeddings_pt, batch_first=True, padding_value=0.0)
+                modal_dict[modal] = all_embeddings_pd.numpy()
             else:
-                modal_dict[modal] = np.array(all_embeddings, dtype=object)
+                modal_dict[modal] = np.concatenate(all_embeddings, axis=0)
         all_embeddings = np.concatenate(list(modal_dict.values()), axis=0)
         return all_embeddings
 
@@ -315,7 +303,7 @@ class Index_Builder:
                 instruction=self.instruction,
             )
             hidden_size = self.encoder.model.get_sentence_embedding_dimension()
-        elif 'col' in self.model_path:
+        elif 'col' in self.retrieval_method:
             from flashrag.retriever.encoder import ColEncoder
 
             self.encoder = ColEncoder(
@@ -344,7 +332,7 @@ class Index_Builder:
             corpus_size = len(self.corpus)
             all_embeddings = self._load_embedding(self.embedding_path, corpus_size, hidden_size)
         else:
-            all_embeddings = self.encode_all_clip() if self.is_clip or self.retrieval_method == 'vdr-2b-v1' or "col" in self.model_path else self.encode_all()
+            all_embeddings = self.encode_all_clip() if self.is_clip or self.retrieval_method in {'vdr-2b-v1', 'qwen3-embedding-4b', 'e5-mistral-7b-instruct','gte-qwen2-1.5b-instruct'} or "col" in self.model_path else self.encode_all()
             if self.save_embedding:
                 self._save_embedding(all_embeddings)
             del self.corpus

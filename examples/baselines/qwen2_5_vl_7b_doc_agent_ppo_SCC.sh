@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=EasyR1-qwen2p5VL-7b-DocAgent
-#SBATCH --nodes=4
+#SBATCH --nodes=2
 #SBATCH --mem=450G
 #SBATCH --mail-user=tianyu.yang@uni-goettingen.de
 #SBATCH --mail-type=all
@@ -23,28 +23,28 @@ MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct  # replace it with your local file path
 WANDB_API_KEY=a3b3f7b7962a8b549c4635ee3a03944d554f1a10
 ROLLOUT_NAME=vllm_agent
 SEARCH_TOP_N=1
-SEARCH_URL=http://10.241.148.27:42354
+SEARCH_URL=http://10.241.148.79:42354
 LIMIT_IMAGES=10
 MAX_RESPONSE_LENGTH=19000
 MAX_PROMPT_LENGTH=720
 ROLLOUT_MAX_NUM_BATCHED_TOKENS=20000
 TENSOR_PARALLEL_SIZE=2
 PROJECT_NAME=EasyR1
-EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_new_recreation
+EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_action-mask-new-reward-func-new-hype_filtered_nr_nrero_kl001_2node-bsz128_obsnkl_actskl_qr_ocr
 PROMPT_KEY=question
-ROLLOUT_BATCH_SIZE=512
+ROLLOUT_BATCH_SIZE=128
 ROLLOUT_N=1
 VAL_BATCH_SIZE=-1
-GLOBAL_BATCH_SIZE=512
+GLOBAL_BATCH_SIZE=128
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE=1
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE=16
 MAX_PIXELS=2508800
 MIN_PIXELS=261070
 MAX_TURN_NUM=6
-TRAIN_DATA_PATH=/mnt/vast-standard/home/yang28/u13688/EasyR1/dataset/Doc_Agent/new_new_train.parquet  # your train data path here
-DEV_DATA_PATH=/mnt/vast-standard/home/yang28/u13688/EasyR1/dataset/Doc_Agent/new_new_val_1024.parquet
+TRAIN_DATA_PATH=/mnt/vast-standard/home/yang28/u13688/EasyR1/dataset/Doc_Agent/new/modify-mpdocvqa_train.parquet  # your train data path here
+DEV_DATA_PATH=/mnt/vast-standard/home/yang28/u13688/EasyR1/dataset/Doc_Agent/new/val_1024.parquet
 CONFIG_PATH=/mnt/vast-standard/home/yang28/u13688/EasyR1/examples/config_ppo.yaml
-SAVE_PATH=/scratch1/projects/scc_ulsb_fe/yang/EasyR1/qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_new_recreation
+SAVE_PATH=/scratch1/projects/scc_ulsb_fe/yang/EasyR1/qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_action-mask-new-reward-func-new-hype_filtered_nr_nrero_kl001_2node-bsz128_obsnkl_actskl_qr_ocr
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY

@@ -63,12 +63,12 @@ class ImageProcessMixin:
         if (image.width * image.height) > self.max_pixels:
             resize_factor = math.sqrt(self.max_pixels / (image.width * image.height))
             width, height = int(image.width * resize_factor), int(image.height * resize_factor)
-            image = image.resize((width, height))
+            image = image.resize((width, height), resample=Image.Resampling.LANCZOS)
 
         if (image.width * image.height) < self.min_pixels:
             resize_factor = math.sqrt(self.min_pixels / (image.width * image.height))
             width, height = int(image.width * resize_factor), int(image.height * resize_factor)
-            image = image.resize((width, height))
+            image = image.resize((width, height), resample=Image.Resampling.LANCZOS)
 
         if image.mode != "RGB":
             image = image.convert("RGB")
@@ -95,6 +95,7 @@ class RLHFDataset(Dataset, ImageProcessMixin):
         max_pixels: Optional[int] = None,
         min_pixels: Optional[int] = None,
         filter_overlong_prompts: bool = True,
+        recall_ocr: bool = False
     ):
         self.tokenizer = tokenizer
         self.processor = processor
@@ -106,6 +107,7 @@ class RLHFDataset(Dataset, ImageProcessMixin):
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
         self.filter_overlong_prompts = filter_overlong_prompts
+        self.recall_ocr = recall_ocr
 
         if "@" in data_path:
             data_path, data_split = data_path.split("@")
@@ -124,8 +126,12 @@ class RLHFDataset(Dataset, ImageProcessMixin):
         self.format_prompt = None
         if format_prompt:
             if format_prompt.endswith('py'):
-                from examples.format_prompt.doc_agent import system_prompt
-                self.format_prompt = system_prompt
+                if not self.recall_ocr:
+                    from examples.format_prompt.doc_agent_search import system_prompt
+                    self.format_prompt = system_prompt
+                else:
+                    from examples.format_prompt.doc_agent_mm_search import system_prompt
+                    self.format_prompt = system_prompt
             else:
                 with open(format_prompt, encoding="utf-8") as f:
                     self.format_prompt = f.read()

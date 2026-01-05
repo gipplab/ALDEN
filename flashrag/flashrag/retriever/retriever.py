@@ -1,6 +1,9 @@
 import json
 import os
 import time
+
+import torch
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import warnings
 from typing import List, Dict, Union
@@ -22,6 +25,8 @@ from tqdm import tqdm
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.models import Filter
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def cache_manager(func):
     """
@@ -140,9 +145,11 @@ class BaseRetriever:
     
     def update_base_setting(self):
         self.retrieval_method = self._config["retrieval_method"]
+        self.ocr_retrieval_method = self._config["ocr_retrieval_method"]
         self.topk = self._config["retrieval_topk"]
 
         self.index_path = self._config["index_path"]
+        self.ocr_index_path = self._config["ocr_index_path"]
         self.corpus_path = self._config["corpus_path"]
 
         self.save_cache = self._config["save_retrieval_cache"]
@@ -193,7 +200,7 @@ class BaseRetriever:
     def _batch_search(self, query, id, num, return_score):
         pass
 
-    def _batch_fetch(self, query, id):
+    def _batch_fetch(self, query, id, mm_fetch):
         pass
 
     def search(self, *args, **kwargs):
@@ -355,6 +362,7 @@ class DenseRetriever(BaseRetriever):
     def __init__(self, config: dict, corpus=None):
         super().__init__(config)
         # pydevd_pycharm.settrace('47.76.117.131', port=47508, stdoutToServer=True, stderrToServer=True)
+        self.device = self._config["device_name"]
         self.load_corpus(corpus)
         self.load_index()
         self.load_model()
@@ -377,79 +385,34 @@ class DenseRetriever(BaseRetriever):
                     temp[p] = i
                 self.page2idx[k] = copy.deepcopy(temp)
             json.dump(self.page2idx, open(os.path.join(os.path.split(self.corpus_path)[0], 'page2idx.json'), 'w'))
-    
+
     def load_index(self):
-        if self.index_path is None or not os.path.exists(self.index_path):
-            raise Warning(f"Index file {self.index_path} does not exist!")
-        if not 'col' in self.retreival_model_path:
-            self.index = faiss.read_index(self.index_path)
-            if self.use_faiss_gpu:
-                co = faiss.GpuMultipleClonerOptions()
-                co.useFloat16 = True
-                co.shard = False
-                self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+        if 'col' in self.retrieval_method:
+            N, s, d = json.load(open(os.path.join(os.path.dirname(self.index_path), 'shape_' + self.retrieval_method + '.json')))
+            self.index = np.memmap(self.index_path,
+                                   shape=(N, s, d),
+                                   dtype=np.float32,
+                                   mode="r")
+            if self.ocr_index_path is not None:
+                self.ocr_index = np.memmap(self.ocr_index_path,
+                                           shape=(N, s, d),
+                                           dtype=np.float32,
+                                           mode="r")
+            else:
+                self.ocr_index = None
         else:
-            batch_emb = np.load(self.index_path, allow_pickle=True)
-            self.collection_name = 'test'
-            qdrant_client = QdrantClient(
-                ":memory:"
-            )
-            qdrant_client.recreate_collection(
-                collection_name=self.collection_name,  # the name of the collection
-                on_disk_payload=False,  # store the payload on disk
-                optimizers_config=models.OptimizersConfigDiff(
-                    indexing_threshold=100
-                ),
-                # it can be useful to swith this off when doing a bulk upload and then manually trigger the indexing once the upload is done
-                vectors_config=models.VectorParams(
-                    size=batch_emb[0].shape[-1],
-                    distance=models.Distance.COSINE,
-                    multivector_config=models.MultiVectorConfig(
-                        comparator=models.MultiVectorComparator.MAX_SIM
-                    ),
-                    quantization_config=models.ScalarQuantization(
-                        scalar=models.ScalarQuantizationConfig(
-                            type=models.ScalarType.INT8,
-                            quantile=0.99,
-                            always_ram=True,
-                        ),
-                    ),
-                ),
-            )
-
-            batch_size = batch_emb[0].shape[0]  # Adjust based on your GPU memory constraints
-
-            # Use tqdm to create a progress bar
-            with tqdm(total=len(self.corpus), desc="Indexing Progress") as pbar:
-                k = 0
-                for i in range(0, len(self.corpus), batch_size):
-                    image_embeddings = batch_emb[k]
-                    # Prepare points for Qdrant
-                    points = []
-                    for j, embedding in enumerate(image_embeddings):
-                        # Convert the embedding to a list of vectors
-                        multivector = embedding.tolist()
-                        points.append(
-                            models.PointStruct(
-                                id=i + j,  # we just use the index as the ID
-                                vector=multivector,  # This is now a list of vectors
-                                payload={
-                                    "fid": i + j
-                                },  # can also add other metadata/data
-                            )
-                        )
-                    # Upload points to Qdrant
-                    qdrant_client.upsert(
-                        collection_name=self.collection_name,
-                        points=points,
-                        wait=False,
-                    )
-                    # Update the progress bar
-                    pbar.update(batch_size)
-                    k += 1
-            self.index = qdrant_client
-        print("Indexing complete!")
-
+            N, d = json.load(open(os.path.join(os.path.dirname(self.index_path), 'shape_' + self.retrieval_method + '.json')))
+            self.index = np.memmap(self.index_path,
+                                shape=(N, d),
+                                dtype=np.float32,
+                                mode="r")
+            if self.ocr_index_path is not None:
+                self.ocr_index = np.memmap(self.ocr_index_path,
+                                shape=(N, d),
+                                dtype=np.float32,
+                                mode="r")
+            else:
+                self.ocr_index = None
     
     def update_additional_setting(self):
         self.query_max_length = self._config["retrieval_query_max_length"]
@@ -459,26 +422,30 @@ class DenseRetriever(BaseRetriever):
         self.instruction = self._config["instruction"]
 
         self.retreival_model_path = self._config['retrieval_model_path']
+        self.ocr_retreival_model_path = self._config['ocr_retrieval_model_path']
         self.use_st = self._config["use_sentence_transformer"]
+        self.ocr_use_st = self._config["ocr_use_sentence_transformer"]
         self.use_faiss_gpu = self._config['faiss_gpu']
 
     def load_model(self):
         if self.use_st:
             self.encoder = STEncoder(
                 model_name = self.retrieval_method,
-                model_path = self._config["retrieval_model_path"],
+                model_path = self.retreival_model_path,
                 max_length = self.query_max_length,
                 use_fp16 = self.use_fp16,
                 instruction = self.instruction,
+                device = self.device
             )
         elif 'col' in self.retrieval_method:
             self.encoder = ColEncoder(
                 model_name = self.retrieval_method,
-                model_path = self._config["retrieval_model_path"],
+                model_path = self.retreival_model_path,
                 pooling_method = self.pooling_method,
                 max_length = self.query_max_length,
                 use_fp16 = self.use_fp16,
                 instruction = self.instruction,
+                device = self.device
             )
         else:
             self.encoder = Encoder(
@@ -488,7 +455,44 @@ class DenseRetriever(BaseRetriever):
                 max_length = self.query_max_length,
                 use_fp16 = self.use_fp16,
                 instruction = self.instruction,
+                device = self.device
             )
+
+        if self.ocr_index_path is not None:
+            if self._config["retrieval_model_path"] != self._config["ocr_retrieval_model_path"]:
+                if self.ocr_use_st:
+                    self.ocr_encoder = STEncoder(
+                        model_name=self.ocr_retrieval_method,
+                        model_path=self.ocr_retreival_model_path,
+                        max_length=self.query_max_length,
+                        use_fp16=self.use_fp16,
+                        instruction=self.instruction,
+                        device=self.device
+                    )
+                elif 'col' in self.ocr_retrieval_method:
+                    self.ocr_encoder = ColEncoder(
+                        model_name=self.ocr_retrieval_method,
+                        model_path=self.ocr_retreival_model_path,
+                        pooling_method=self.pooling_method,
+                        max_length=self.query_max_length,
+                        use_fp16=self.use_fp16,
+                        instruction=self.instruction,
+                        device=self.device
+                    )
+                else:
+                    self.ocr_encoder = Encoder(
+                        model_name=self.ocr_retrieval_method,
+                        model_path=self.ocr_retreival_model_path,
+                        pooling_method=self.pooling_method,
+                        max_length=self.query_max_length,
+                        use_fp16=self.use_fp16,
+                        instruction=self.instruction,
+                        device=self.device
+                    )
+            else:
+                self.ocr_encoder = self.encoder
+        else:
+            self.ocr_encoder = None
 
     def _fetch(self, query: str, id=''):
         for i, q in zip(query, id):
@@ -516,102 +520,184 @@ class DenseRetriever(BaseRetriever):
         else:
             return results
 
-    def _batch_fetch(self, query: List[str], id: List[str]):
-        # pydevd_pycharm.settrace('47.76.117.131', port=47509, stdoutToServer=True, stderrToServer=True)
+    def _batch_fetch(self, query: List[str], id: List[str], mm_fetch: bool):
         results = []
-        for i, q in zip(id, query):
-            if str.isdigit(q):
+        modals = []
+        for i, arg in zip(id, query):
+            if mm_fetch:
+                pattern = r"^(image|text),\s*([1-9]\d*)$"
+                match = re.match(pattern, arg)
+                if match:
+                    modal, q = match.group(1), match.group(2)
+                else:
+                    modal = ''
+                    q = ''
+            else:
+                pattern = r"^([1-9]\d*)-th$"
+                match = re.match(pattern, arg)
+                if match:
+                    modal, q = 'image', match.group(1)
+                else:
+                    modal = ''
+                    q = ''
+            if str.isdigit(q) and modal in {'image', 'text'}:
                 q = str(int(q) - 1)
             else:
                 q = 'error'
             corpus_idx = self.page2idx[i].get(q, 'Requested page number does not exist!')
+            modals.append(modal)
             if isinstance(corpus_idx, int):
                 results.append(self.corpus[corpus_idx])
             else:
                 if q == 'error':
-                    corpus_idx = 'Request form is wrong, please only input one page number'
+                    corpus_idx = 'Request form is wrong, please correct it!'
                 results.append(corpus_idx)
-        return results
+        return results, modals
 
-    def _batch_search(self, query: List[str], id: List[str], num: int = None, return_score=False):
+    def _batch_search(self, query: List[str], id: List[str], num: int = None, return_score=False, recall_ocr=False, max_workers=8):
         # pydevd_pycharm.settrace('47.83.127.143', port=47509, stdoutToServer=True, stderrToServer=True)
         if isinstance(query, str):
             query = [query]
         if num is None:
             num = self.topk
         batch_size = len(query)
-        pool = ThreadPool(batch_size)
+
+        scores = [None] * len(query)
+        idxs = [None] * len(query)
+        ocr_scores = [None] * len(query)
+        ocr_idxs = [None] * len(query)
+        ocr_results = [None] * len(query)
+        results = [None] * len(query)
+
+        # pydevd_pycharm.settrace('127.0.0.1', port=47508, stdout_to_server=True, stderr_to_server=True)
 
         if 'col' not in self.retrieval_method:
 
-            def single_search(query_emb, d_id, k):
-                idx_range = self.id2idx[d_id]
-                sel = faiss.IDSelectorRange(idx_range[0], idx_range[1])
-                params = faiss.SearchParameters(sel=sel)
-                return self.index.search(query_emb, k=k, params=params)
+            def _topk_local(sub_vectors, query_vec, k):
+                """
+                sub_vectors: (m, d) float32
+                query_vec: (d,) float32
+                returns: (dists_sorted, ids_sorted_local)  (both 1D arrays length <= k)
+                """
+                if sub_vectors.shape[0] == 0:
+                    return np.array([], dtype='float32'), np.array([], dtype='int64')
 
-            # emb = self.encoder.encode(query, batch_size=batch_size, is_query=True)
+                scores = sub_vectors.dot(query_vec)  # shape (m,)
+                m = scores.shape[0]
+                kk = min(k, m)
+                # use argpartition to get unsorted top-kk indices (fast O(m))
+                idx_part = np.argpartition(-scores, kk - 1)[:kk]
+                idx_sorted_local = idx_part[np.argsort(-scores[idx_part])]  # sort the kk candidates
+                return scores[idx_sorted_local], idx_sorted_local.astype('int64')
+
+            def worker(i, qvec, doc_id):
+                s, e = self.id2idx[doc_id]
+                sub = self.index[s:e]  # view, no copy if embeddings is contiguous
+                dists, idx_local = _topk_local(sub, qvec, num)
+                # convert local indices to global ids (global index = s + local_idx)
+                global_ids = (idx_local + s).astype('int64')
+                res = load_docs(self.corpus, global_ids)
+                return i, dists, global_ids, res
+
             print("Begin faiss searching...")
-            query_emb = self.encoder.encode(query)
-            tri_results = pool.starmap(single_search, [(np.expand_dims(a_query, 0), a_doc_id, num) for a_query, a_doc_id in zip(query_emb, id)])
-            # scores, idxs = self.index.search(emb, k=num)
-            scores = [res[0] for res in tri_results]
-            scores = np.concatenate(scores, axis=0)
-            idxs = [res[1] for res in tri_results]
-            idxs = np.concatenate(idxs, axis=0)
-            # scores, idxs = tri_results
-            print("End faiss searching")
-            scores = scores.tolist()
-            idxs = idxs.tolist()
+            query_emb = self.encoder.encode(query, batch_size=batch_size, is_query=True)
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [ex.submit(worker, i, query_emb[i], id[i]) for i in range(len(query))]
+                for fut in as_completed(futures):
+                    i, dists, gids, ress = fut.result()
+                    scores[i] = dists
+                    idxs[i] = gids
+                    results[i] = ress
         else:
-            def single_search(query_emb, d_id, k):
-                idx_range = self.id2idx[d_id]
-                query_emb = query_emb.tolist()
-                range_filter = models.Filter(
-                    must=[models.FieldCondition(
-                    key="fid",
-                    range=models.Range(
-                        gt=None,
-                        gte=idx_range[0],
-                        lt=idx_range[1],
-                        lte=None,
-                    ),
-                )]
-                )
-                # range_filter = Filter(**{
-                #     "must": [{
-                #         "key": "id",  # Store city information in a field of the same name
-                #         "range": {  # This condition checks if payload field has the requested value
-                #             "gt": None,
-                #             "gte": idx_range[0],
-                #             "lt": idx_range[1],
-                #             "lte": None
-                #         }
-                #     }]
-                # })
-                search_result = self.index.query_points(
-                    collection_name=self.collection_name,
-                    query_filter=range_filter,
-                    query=query_emb, limit=k, timeout=60
-                )
-                return search_result.points
+            def _topk_local(sub_vectors, query_vec, k):
+                """
+                sub_vectors: (m, d) float32
+                query_vec: (d,) float32
+                returns: (dists_sorted, ids_sorted_local)  (both 1D arrays length <= k)
+                """
+                if sub_vectors.shape[0] == 0:
+                    return np.array([], dtype='float32'), np.array([], dtype='int64')
 
-            print("Begin qdrant searching...")
-            query_emb = self.encoder.encode(query, is_query=True)
-            tri_results = pool.starmap(single_search, [(a_query, a_doc_id, num) for a_query, a_doc_id in
-                                                       zip(query_emb, id)])
-            # scores, idxs = self.index.search(emb, k=num)
-            scores = [[pts.score for pts in res] for res in tri_results]
-            idxs = [[pts.id for pts in res] for res in tri_results]
-            print("End qdrant searching")
-        flat_idxs = sum(idxs, [])
-        results = load_docs(self.corpus, flat_idxs)
-        results = [results[i * num: (i + 1) * num] for i in range(len(idxs))]
+                scores = self.encoder.tokenizer.score_multi_vector(query_vec, sub_vectors).squueze(0).numpy()  # shape (m,)
+                m = scores.shape[0]
+                kk = min(k, m)
+                # use argpartition to get unsorted top-kk indices (fast O(m))
+                idx_part = np.argpartition(-scores, kk - 1)[:kk]
+                idx_sorted_local = idx_part[np.argsort(-scores[idx_part])]  # sort the kk candidates
+                return scores[idx_sorted_local], idx_sorted_local.astype('int64')
+
+            def worker(i, qvec, doc_id):
+                s, e = self.id2idx[doc_id]
+                sub = self.index[s:e]  # view, no copy if embeddings is contiguous
+                dists, idx_local = _topk_local(torch.from_numpy(sub), torch.from_numpy(qvec).unsqueeze(0), num)
+                # convert local indices to global ids (global index = s + local_idx)
+                global_ids = (idx_local + s).astype('int64')
+                res = load_docs(self.corpus, global_ids)
+                return i, dists, global_ids, res
+
+            print("Begin faiss searching...")
+            query_emb = self.encoder.encode(query, batch_size=batch_size, is_query=True)
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [ex.submit(worker, i, query_emb[i], id[i]) for i in range(len(query))]
+                for fut in as_completed(futures):
+                    i, dists, gids, ress = fut.result()
+                    scores[i] = dists
+                    idxs[i] = gids
+                    results[i] = ress
+
+        if self.ocr_index is not None and recall_ocr:
+            if 'col' not in self.ocr_retrieval_method:
+                def worker_ocr(i, qvec, doc_id):
+                    s, e = self.id2idx[doc_id]
+                    sub = self.ocr_index[s:e]  # view, no copy if embeddings is contiguous
+                    dists, idx_local = _topk_local(sub, qvec, num)
+                    # convert local indices to global ids (global index = s + local_idx)
+                    global_ids = (idx_local + s).astype('int64')
+                    res = load_docs(self.corpus, global_ids)
+                    return i, dists, global_ids, res
+
+                print("Begin ocr faiss searching...")
+                query_emb = self.ocr_encoder.encode(query, batch_size=batch_size, is_query=True)
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = [ex.submit(worker_ocr, i, query_emb[i], id[i]) for i in range(len(query))]
+                    for fut in as_completed(futures):
+                        i, dists, gids, ress = fut.result()
+                        ocr_scores[i] = dists
+                        ocr_idxs[i] = gids
+                        ocr_results[i] = ress
+            else:
+                def worker_ocr(i, qvec, doc_id):
+                    s, e = self.id2idx[doc_id]
+                    sub = self.ocr_index[s:e]  # view, no copy if embeddings is contiguous
+                    dists, idx_local = _topk_local(torch.from_numpy(sub), torch.from_numpy(qvec).unsqueeze(0), num)
+                    # convert local indices to global ids (global index = s + local_idx)
+                    global_ids = (idx_local + s).astype('int64')
+                    res = load_docs(self.corpus, global_ids)
+                    return i, dists, global_ids, res
+
+                print("Begin ocr faiss searching...")
+                query_emb = self.ocr_encoder.encode(query, batch_size=batch_size, is_query=True)
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = [ex.submit(worker_ocr, i, query_emb[i], id[i]) for i in range(len(query))]
+                    for fut in as_completed(futures):
+                        i, dists, gids, ress = fut.result()
+                        ocr_scores[i] = dists
+                        ocr_idxs[i] = gids
+                        ocr_results[i] = ress
+        else:
+            ocr_scores = None
+            ocr_results = None
 
         if return_score:
-            return results, scores
+            if not recall_ocr:
+                return results, scores
+            else:
+                return results, scores, ocr_results, ocr_scores
         else:
-            return results
+            if not recall_ocr:
+                return results
+            else:
+                return results, ocr_results
 
 def retry(max: int=10, sleep: int=1):
     def decorator(func):

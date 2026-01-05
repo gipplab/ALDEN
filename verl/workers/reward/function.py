@@ -27,6 +27,8 @@ import pydevd_pycharm
 
 from ...protocol import DataProto
 from .config import RewardConfig
+import torch.distributed as dist
+from ...utils.py_functional import compute_query_weights_and_distinct_reward, ndcg_at_k, fetch_reward
 
 
 class RewardScore(TypedDict):
@@ -87,15 +89,32 @@ class FunctionRewardManager:
                 for key, value in score.items():
                     reward_metrics[key].append(value)
         else:
-            # pydevd_pycharm.settrace('47.83.127.143', port=47508, stdoutToServer=True, stderrToServer=True)
+            # rank = int(os.environ.get('RANK', '0'))
+            # # 只有在 Rank 0 且在正确的节点上时才连接
+            # # 这里的逻辑假设你的 SSH 隧道是建立在运行 Rank 0 的那个节点上的
+            # if rank == 0:
+            #     # try:
+            #     # print(f"Rank {rank}: Attempting to connect to Debug Server...")
+            #     pydevd_pycharm.settrace('127.0.0.1', port=47508, stdoutToServer=True, stderrToServer=True)
+            #     #     print(f"Rank {rank}: Connected!")
+            #     # except Exception as e:
+            #     #     print(f"Rank {rank}: Failed to connect to Debug Server. Error: {e}")
+            #     # 选择性：如果连接失败，是否继续运行？
+            #     # pass
+            # else:
+            #     print(f"Rank {rank}: Skipping Debug Server connection.")
             for i in range(len(data)):
                 data_item = data[i]  # DataProtoItem
                 response_ids = data_item.batch["responses"]
+                query_mask = data_item.batch["query_mask"]
                 turn_sequence_mask = data_item.batch["turn_sequence_mask"]
                 end_of_response_position_mask = data_item.batch["end_of_response_position_mask"]
                 max_turn = torch.max(turn_sequence_mask).item() + 1
                 end_of_response_position = end_of_response_position_mask.nonzero(as_tuple=True)[0]
-                pre_pids = set()
+                pre_pids_image = set()
+                pre_pids_text = set()
+                pre_ndcg = None
+                all_queries = []
                 gt_pids = set(data_item.non_tensor_batch["answer_page_idx"])
                 turn_level_reward_metrics = defaultdict(list)
                 for mti in range(max_turn):
@@ -104,38 +123,61 @@ class FunctionRewardManager:
                         turn_response_ids, skip_special_tokens=self.config.skip_special_tokens
                     )
 
+                    # if max_turn > 1:
                     if mti != max_turn - 1:
-                        co_pid = set(data_item.non_tensor_batch['page_ids']['N.O'][mti])
-                        score = self.score_fn(response_str, None)
-                        acs = len(co_pid.intersection(gt_pids))
-                        rps = len(co_pid.intersection(pre_pids))
-                        if score["overall"] == 0.0:
-                            if acs == 1.0 and rps == 0.0:
-                                oa = score["overall"] + 1.0
-                            elif acs == 1.0 and rps == 1.0:
-                                oa = score["overall"] - 0.5
-                            elif acs == 0.0 and rps == 0.0 and co_pid:
-                                oa = score["overall"] + 0.0
-                            elif acs == 0.0 and rps == 0.0 and not co_pid:
-                                oa = score["overall"] - 0.5
-                            elif acs == 0.0 and rps == 1.0:
-                                oa = score["overall"] - 0.5
-                        # if acs != 0 or rps != 0:
-                        #     oa = (acs - rps * self.config.repetition_penalty_factor) * 0.6 + score["overall"]
-                        # else:
-                        #     oa = 0.05
-                            score["overall"] = oa
-                        # score["accuracy"] = (acs - rps * self.config.repetition_penalty_factor) * 0.6
-                        # if score["overall"] == 0.4:
-                        #     acs = len(co_pid.intersection(gt_pids)) / (len(gt_pids) + 1e-8)
-                        #     rps = len(co_pid.intersection(pre_pids)) / (len(co_pid) + 1e-8)
-                        #     oa = (acs - rps * self.config.repetition_penalty_factor) * 0.6 + score["overall"]
-                        #     score["overall"] = oa
-                        #     score["accuracy"] = (acs - rps * self.config.repetition_penalty_factor) * 0.6
-                        pre_pids.update(co_pid)
+                        score = self.score_fn(response_str, None, self.config.mm_fetch)
+                        if score["overall"] == 0.0 and data_item.non_tensor_batch["ground_truth"] != 'The problem is not answerable':
+                            if score["search"] > 0:
+                                current_search_image = set(data_item.non_tensor_batch['page_ids']['N.O'][mti][:self.config.usage_top_n])
+
+                                if self.config.recall_ocr:
+                                    current_search_text = set(data_item.non_tensor_batch['ocr_page_ids']['N.O'][mti][:self.config.usage_top_n])
+                                    acs = len(((current_search_image | current_search_text) & gt_pids) - pre_pids_image - pre_pids_text)
+                                    rps = 0.0
+                                    nss = 0.0
+                                    pre_pids_text.update(data_item.non_tensor_batch['ocr_page_ids']['N.O'][mti])
+                                    pre_pids_image.update(data_item.non_tensor_batch['page_ids']['N.O'][mti])
+                                else:
+                                    acs = len((current_search_image & gt_pids) - pre_pids_image)
+                                    nss = 0.0
+                                    rps = 0.0
+                                    pre_pids_image.update(data_item.non_tensor_batch['page_ids']['N.O'][mti][:self.config.usage_top_n])
+                            elif score["fetch_image"] > 0:
+                                current_search_image = set(data_item.non_tensor_batch['page_ids']['N.O'][mti])
+                                acs = fetch_reward(data_item.non_tensor_batch['page_ids']['N.O'][mti], gt_pids)
+                                rps = len(current_search_image.intersection(pre_pids_image))
+                                nss = 0.0
+                                pre_pids_image.update(data_item.non_tensor_batch['page_ids']['N.O'][mti])
+                            else:
+                                assert score["fetch_text"] > 0
+                                acs = fetch_reward(data_item.non_tensor_batch['ocr_page_ids']['N.O'][mti], gt_pids)
+                                current_search_text = set(
+                                    data_item.non_tensor_batch['ocr_page_ids']['N.O'][mti])
+                                rps = len(current_search_text.intersection(pre_pids_text))
+                                pre_pids_text.update(data_item.non_tensor_batch['ocr_page_ids']['N.O'][mti])
+                                nss = 0.0
+                            score['overall'] = score['overall'] + acs - rps - nss
+
+                            if self.config.search_query_repetition_penalty:
+                                query_positions = (query_mask == mti).nonzero(as_tuple=True)[0] + 1
+                                query_ids = torch.masked_select(response_ids, (query_mask == mti))
+                                query_tokens = self.tokenizer.convert_ids_to_tokens(query_ids)
+                                query_reward = torch.zeros_like(query_ids, dtype=reward_tensor.dtype, device=reward_tensor.device)
+                                if len(all_queries) > 0:
+                                    res = compute_query_weights_and_distinct_reward(
+                                        current_query_tokens=query_tokens,
+                                        prior_queries_tokens=all_queries,
+                                        n=3,
+                                        alpha=0.3,  # start small; warm up later
+                                        mode="max",  # or "max" (stricter) / "avg"
+                                        fallback_n_if_short=True,
+                                    )
+                                    query_reward = torch.tensor(res["weights"], dtype=reward_tensor.dtype, device=reward_tensor.device) * res["reward"]
+                                all_queries.append(query_tokens)
+                                reward_tensor[i, query_positions] = query_reward
                     else:
                         ground_truth = data_item.non_tensor_batch["ground_truth"]
-                        score = self.score_fn(response_str, ground_truth)
+                        score = self.score_fn(response_str, ground_truth, self.config.mm_fetch)
                     for key, value in score.items():
                         turn_level_reward_metrics[key].append(value)
 
@@ -145,7 +187,9 @@ class FunctionRewardManager:
                         reward_metrics[key].append((sum(value) / len(value)))
                     else:
                         reward_metrics[key].append(sum(value))
-                reward_metrics['is_accuracy'].append(len(pre_pids.intersection(gt_pids)) / len(gt_pids))
+                reward_metrics['is_accuracy'].append(len(pre_pids_image.union(pre_pids_text).intersection(gt_pids)) / len(gt_pids))
                 reward_metrics['num_turn'].append(max_turn)
+                # if dist.is_initialized():
+                #     dist.barrier()
 
         return reward_tensor, reward_metrics

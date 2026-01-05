@@ -69,6 +69,13 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
     return output.view(*batch_dim)
 
 
+def entropy_from_logits(logits: torch.Tensor):
+    """Calculate entropy from logits."""
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
+
+
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, dim: int = None, eps: float = 1e-8) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
     return (values * mask).sum(dim=dim) / (mask.sum(dim=dim) + eps)

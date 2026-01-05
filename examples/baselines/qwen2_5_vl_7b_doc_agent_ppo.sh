@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=EasyR1-qwen2p5VL-7b-DocAgent
-#SBATCH --nodes=4
+#SBATCH --nodes=2
 #SBATCH --mem=450G
 #SBATCH --mail-user=tianyu.yang@uni-goettingen.de
 #SBATCH --mail-type=all
@@ -21,29 +21,29 @@ set -x
 MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct  # replace it with your local file path
 WANDB_API_KEY=a3b3f7b7962a8b549c4635ee3a03944d554f1a10
 ROLLOUT_NAME=vllm_agent
-SEARCH_TOP_N=1
-SEARCH_URL=http://10.241.148.53:42354
-LIMIT_IMAGES=10
-MAX_RESPONSE_LENGTH=19000
-MAX_PROMPT_LENGTH=720
-ROLLOUT_MAX_NUM_BATCHED_TOKENS=20000
-TENSOR_PARALLEL_SIZE=2
+SEARCH_TOP_N=5
+SEARCH_URL=http://10.241.148.50:42354
+LIMIT_IMAGES=15
+MAX_RESPONSE_LENGTH=18000
+MAX_PROMPT_LENGTH=2500
+ROLLOUT_MAX_NUM_BATCHED_TOKENS=21500
+TENSOR_PARALLEL_SIZE=1
 PROJECT_NAME=EasyR1
-EXPERIMENT_NAME=qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_action-mask-new-reward-func-new-hype_filtered_nr_nrero_kl01
+EXPERIMENT_NAME=base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue
 PROMPT_KEY=question
-ROLLOUT_BATCH_SIZE=512
+ROLLOUT_BATCH_SIZE=128
 ROLLOUT_N=1
-VAL_BATCH_SIZE=-1
-GLOBAL_BATCH_SIZE=512
+VAL_BATCH_SIZE=128
+GLOBAL_BATCH_SIZE=128
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE=1
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE=16
-MAX_PIXELS=2508800
+MAX_PIXELS=862400
 MIN_PIXELS=261070
 MAX_TURN_NUM=6
-TRAIN_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/new_new_fiter-mpdocvqa_train.parquet  # your train data path here
-DEV_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/new_new_val_1024.parquet
+TRAIN_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/latest/train.parquet  # your train data path here
+DEV_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/latest/val_1024.parquet
 CONFIG_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/examples/config_ppo.yaml
-SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent_ppo
+SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/base_alden
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY
@@ -133,6 +133,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
     trainer.experiment_name=${EXPERIMENT_NAME} \
     trainer.n_gpus_per_node=${SLURM_GPUS_PER_NODE} \
     trainer.nnodes=${SLURM_NNODES}"
-#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/EasyR1/qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_01reward_new-metrics_new/global_step_40"
+#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/EasyR1/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite/global_step_239"
 #    trainer.save_checkpoint_path=${SAVE_PATH}
 #    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent/global_step_160"

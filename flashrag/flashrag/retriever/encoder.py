@@ -4,13 +4,15 @@ import json
 import torch
 import numpy as np
 from tqdm import tqdm
-from flashrag.retriever.utils import load_model, pooling, parse_query, parse_image
+from flashrag.retriever.utils import load_model, pooling, parse_query, parse_image, load_col_model
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+# from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
 from transformers.utils.import_utils import is_flash_attn_2_available
 from PIL import Image
 import torch
 import math
+import torch.nn.functional as F
+import pydevd_pycharm
 
 
 class Encoder:
@@ -30,7 +32,7 @@ class Encoder:
             Encodes a list of queries into embeddings.
     """
 
-    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16, instruction):
+    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16, instruction, device="cuda"):
         self.model_name = model_name
         self.model_path = model_path
         self.pooling_method = pooling_method
@@ -41,7 +43,7 @@ class Encoder:
         self.model, self.tokenizer = load_model(model_path=model_path, use_fp16=use_fp16)
 
     @torch.inference_mode()
-    def single_batch_encode(self, query_list: Union[List[str], str], is_query=True) -> np.ndarray:
+    def single_batch_encode(self, query_list: Union[List[str], str], is_query=False) -> np.ndarray:
         query_list = parse_query(self.model_name, query_list, self.instruction, is_query)
 
         inputs = self.tokenizer(
@@ -64,6 +66,8 @@ class Encoder:
             query_emb = pooling(
                 pooler_output, last_hidden_state, inputs["attention_mask"], self.pooling_method
             )
+            if self.model_name == 'e5-large-v2':
+                query_emb = F.normalize(query_emb, p=2, dim=1)
         if "dpr" not in self.model_name:
             query_emb = torch.nn.functional.normalize(query_emb, dim=-1)
         query_emb = query_emb.detach().cpu().numpy()
@@ -71,7 +75,7 @@ class Encoder:
         return query_emb
 
     @torch.inference_mode()
-    def encode(self, query_list: List[str], batch_size=64, is_query=True) -> np.ndarray:
+    def encode(self, query_list: List[str], batch_size=64, is_query=False, modal='') -> np.ndarray:
         print('-------------encode----------------')
         print(query_list)
         print('--------------------------------')
@@ -106,7 +110,7 @@ class ColEncoder:
             Encodes a list of queries into embeddings.
     """
 
-    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16, instruction):
+    def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16, instruction, device="cuda"):
         self.model_name = model_name
         self.model_path = model_path
         self.pooling_method = pooling_method
@@ -114,24 +118,40 @@ class ColEncoder:
         self.use_fp16 = use_fp16
         self.instruction = instruction
         self.gpu_num = torch.cuda.device_count()
-        self.model = ColQwen2_5.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            device_map="cuda:0",  # or "mps" if on Apple Silicon
-            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
-        ).eval()
-        self.tokenizer = ColQwen2_5_Processor.from_pretrained(model_path)
+        self.model, self.tokenizer = load_col_model(model_path, model_name, device)
 
     @torch.inference_mode()
-    def encode(self, query_list: List[str], batch_size=64, is_query=False, modal=None) -> np.ndarray:
-        if is_query:
-            query_batch = self.tokenizer.process_queries(query_list).to(self.model.device)
+    def encode(self, query_list, batch_size=64, is_query=False, modal=None) -> np.ndarray:
+        if "colbert" in self.model_name:
+            if is_query:
+                query_emb = self.model.encode(
+                    query_list,
+                    batch_size=batch_size,
+                    is_query=True,  # Encoding queries
+                    show_progress_bar=False,
+                )
+                query_emb = np.array(query_emb)
+                query_emb = query_emb.astype(np.float32, order="C")
+            else:
+                unp_emb = self.model.encode(
+                    query_list,
+                    batch_size=batch_size,
+                    is_query=False,  # Encoding documents
+                    show_progress_bar=True,
+                )
+                # unp_emb_pt = [torch.from_numpy(doc) for doc in unp_emb]
+                # query_emb = pad_sequence(unp_emb_pt, batch_first=True, padding_value=0.0)
+                # query_emb = query_emb.to(torch.float).cpu().numpy()
+                query_emb = np.array(unp_emb, dtype=object)
         else:
-            query_batch = self.tokenizer.process_images(query_list).to(self.model.device)
+            if is_query:
+                query_batch = self.tokenizer.process_queries(query_list).to(self.model.device)
+            else:
+                query_batch = self.tokenizer.process_images(query_list).to(self.model.device)
 
-        query_emb = self.model(**query_batch)
-        query_emb = query_emb.detach().to(torch.float).cpu().numpy()
-        query_emb = query_emb.astype(np.float32, order="C")
+            query_emb = self.model(**query_batch)
+            query_emb = query_emb.detach().to(torch.float).cpu().numpy()
+            query_emb = query_emb.astype(np.float32, order="C")
         return query_emb
 
     @torch.inference_mode()
@@ -160,7 +180,7 @@ class STEncoder:
             Encodes a list of queries into embeddings using multiple GPUs.
     """
 
-    def __init__(self, model_name, model_path, max_length, use_fp16, instruction):
+    def __init__(self, model_name, model_path, max_length, use_fp16, instruction, device="cuda"):
         import torch
         from sentence_transformers import SentenceTransformer
 
@@ -170,19 +190,34 @@ class STEncoder:
         self.use_fp16 = use_fp16
         self.instruction = instruction
         self.model = SentenceTransformer(
-            model_path, device="cuda", trust_remote_code=True,
+            model_path, device=device, trust_remote_code=True,
             model_kwargs={
                 "torch_dtype": torch.bfloat16,
                 "attn_implementation": "flash_attention_2"
             }
         )#"device_map": "cuda:0",
+        if model_path in {"intfloat/e5-mistral-7b-instruct", "Alibaba-NLP/gte-Qwen2-1.5B-instruct"}:
+            self.model.max_seq_length = max_length
 
     @torch.inference_mode()
-    def encode(self, query_list, batch_size=64, is_query=True, modal='') -> np.ndarray:
-        query_list = parse_query(self.model_name, query_list, self.instruction, is_query) if not self.model_name == 'vdr-2b-v1' else query_list
-        query_emb = self.model.encode(
-            query_list, batch_size=batch_size, convert_to_numpy=True, normalize_embeddings=True
-        )
+    def encode(self, query_list, batch_size=64, is_query=False, modal='') -> np.ndarray:
+        # query_list = parse_query(self.model_name, query_list, self.instruction, is_query) if not (self.model_name == 'vdr-2b-v1' or self.model_name == 'Qwen/Qwen3-Embedding-4B') else query_list
+        if is_query and self.model_path == 'Qwen/Qwen3-Embedding-4B':
+            query_emb = self.model.encode(
+                query_list, batch_size=batch_size, convert_to_numpy=True, prompt_name="query"
+            )
+        elif is_query and self.model_path == 'intfloat/e5-mistral-7b-instruct':
+            query_emb = self.model.encode(
+                query_list, batch_size=batch_size, convert_to_numpy=True, prompt_name="web_search_query"
+            )
+        elif is_query and self.model_path == 'Alibaba-NLP/gte-Qwen2-1.5B-instruct':
+            query_emb = self.model.encode(
+                query_list, batch_size=batch_size, convert_to_numpy=True, prompt_name="query"
+            )
+        else:
+            query_emb = self.model.encode(
+                query_list, batch_size=batch_size, convert_to_numpy=True
+            )
         query_emb = query_emb.astype(np.float32, order="C")
 
         return query_emb
@@ -205,7 +240,7 @@ class STEncoder:
         return query_emb
 
 class VDREncoder:
-    def __init__(self, model_name, model_path, max_length, use_fp16, instruction):
+    def __init__(self, model_name, model_path, max_length, use_fp16, instruction, device="cuda"):
         self.model_name = model_name
         self.max_pixels = 768 * 28 * 28
         self.min_pixels = 1 * 28 * 28

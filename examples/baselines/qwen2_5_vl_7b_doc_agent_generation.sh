@@ -17,28 +17,28 @@
 set -x
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 
-MODEL_PATH=checkpoints/EasyR1/qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_new_reward/global_step_105/actor/huggingface  # replace it with your local file path
+MODEL_PATH=checkpoints/EasyR1/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue/global_step_479/actor/huggingface  # replace it with your local file path
 WANDB_API_KEY=a3b3f7b7962a8b549c4635ee3a03944d554f1a10
 ROLLOUT_NAME=vllm_agent
-SEARCH_TOP_N=1
-SEARCH_URL=http://10.241.148.48:42354
+SEARCH_TOP_N=5
+SEARCH_URL=http://10.241.148.9:42354
 LIMIT_IMAGES=15
-MAX_RESPONSE_LENGTH=19000
-MAX_PROMPT_LENGTH=1024
-ROLLOUT_MAX_NUM_BATCHED_TOKENS=22000
-TENSOR_PARALLEL_SIZE=2
+MAX_RESPONSE_LENGTH=18000
+MAX_PROMPT_LENGTH=2500
+ROLLOUT_MAX_NUM_BATCHED_TOKENS=21500
+TENSOR_PARALLEL_SIZE=1
 PROMPT_KEY=question
 ROLLOUT_BATCH_SIZE=128
 ROLLOUT_N=1
 VAL_BATCH_SIZE=-1
 TEMPERATURE=0.2
-MAX_PIXELS=2508800
+MAX_PIXELS=862400
 MIN_PIXELS=261070
-MAX_TURN_NUM=5
-TEST_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/test/feta.parquet
+MAX_TURN_NUM=6
+TEST_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/test/ldu.parquet
 
 CONFIG_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/examples/generation_config.yaml
-SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/generation_results/qwen2_5_vl_7b_doc_agent_turn-level-ppo_bi-level-gae-mask-without-temp_new_reward_colqwen
+SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/generation_results/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue_479_new_top1
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY
