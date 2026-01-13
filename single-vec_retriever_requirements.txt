@@ -307,7 +307,7 @@ unicodedata2 @ file:///croot/unicodedata2_1736541023050/work
 urllib3==2.4.0
 uvicorn==0.34.2
 uvloop==0.21.0
-virtualenv==20.30.0
+virtualenv==20.36.1
 vllm==0.8.1
 voyager==2.1.0
 wasabi==1.1.3
