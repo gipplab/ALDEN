@@ -304,7 +304,7 @@ typing_extensions==4.12.2
 tzdata==2025.2
 ujson==5.11.0
 unicodedata2 @ file:///croot/unicodedata2_1736541023050/work
-urllib3==2.4.0
+urllib3==2.6.3
 uvicorn==0.34.2
 uvloop==0.21.0
 virtualenv==20.30.0
