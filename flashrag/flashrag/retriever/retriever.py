@@ -144,8 +144,8 @@ class BaseRetriever:
         self.update_additional_setting()
     
     def update_base_setting(self):
-        self.retrieval_method = self._config["retrieval_method"]
-        self.ocr_retrieval_method = self._config["ocr_retrieval_method"]
+        self.retrieval_method = self._config["retrieval_method"].lower()
+        self.ocr_retrieval_method = self._config["ocr_retrieval_method"].lower()
         self.topk = self._config["retrieval_topk"]
 
         self.index_path = self._config["index_path"]
@@ -394,6 +394,8 @@ class DenseRetriever(BaseRetriever):
                                    dtype=np.float32,
                                    mode="r")
             if self.ocr_index_path is not None:
+                N, s, d = json.load(
+                    open(os.path.join(os.path.dirname(self.ocr_index_path), 'shape_' + self.ocr_retrieval_method + '.json')))
                 self.ocr_index = np.memmap(self.ocr_index_path,
                                            shape=(N, s, d),
                                            dtype=np.float32,
@@ -407,6 +409,8 @@ class DenseRetriever(BaseRetriever):
                                 dtype=np.float32,
                                 mode="r")
             if self.ocr_index_path is not None:
+                N, d = json.load(
+                    open(os.path.join(os.path.dirname(self.ocr_index_path), 'shape_' + self.ocr_retrieval_method + '.json')))
                 self.ocr_index = np.memmap(self.ocr_index_path,
                                 shape=(N, d),
                                 dtype=np.float32,
@@ -618,7 +622,7 @@ class DenseRetriever(BaseRetriever):
                 if sub_vectors.shape[0] == 0:
                     return np.array([], dtype='float32'), np.array([], dtype='int64')
 
-                scores = self.encoder.tokenizer.score_multi_vector(query_vec, sub_vectors).squueze(0).numpy()  # shape (m,)
+                scores = self.encoder.tokenizer.score_multi_vector(query_vec, sub_vectors).squeeze(0).numpy()  # shape (m,)
                 m = scores.shape[0]
                 kk = min(k, m)
                 # use argpartition to get unsorted top-kk indices (fast O(m))

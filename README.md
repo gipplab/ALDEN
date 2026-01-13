@@ -6,12 +6,34 @@ This repository contains the official implementation of our paper: **[ALDEN: Rei
 
 ## 🛠️ Installation
 
-Bash
+### Installing the Training Environment
 
-```
+```shell
 conda create -n alden python=3.10
 conda activate alden
-pip install -r requirements.txt
+git clone https://github.com/gipplab/ALDEN.git
+cd ./ALDEN
+pip install -e .
+```
+
+### Installing the Single-Vector Retriever Environment
+
+```shell
+conda create -n alden-sv python=3.10
+cd ./ALDEN
+pip install -r single-vec_retriever_requirements.txt
+cd ./flashrag
+pip install -e .
+```
+
+### Installing the Multi-vector Retriever Environment
+
+```shell
+conda create -n alden-mv python=3.10
+cd ./ALDEN
+pip install -r multi-vec_retriever_requirements.txt
+cd ./flashrag
+pip install -e .
 ```
 
 ## 📂 Dataset Preprocessing
@@ -49,6 +71,46 @@ python index_builder.py \
     --save_embedding
 ```
 
+```bash
+python index_builder.py \
+	--retrieval_method gte-Qwen2-1.5B-instruct \
+	--model_path Alibaba-NLP/gte-Qwen2-1.5B-instruct \
+	--corpus_path /path/to/your/images_corpus/images.parquet \
+	--save_dir /path/to/save/images_index \
+	--max_length 4096 \
+	--batch_size 128 \
+	--faiss_type Flat \
+	--index_modal text \
+	--sentence_transformer \
+	--save_embedding
+```
+
+```bash
+python index_builder.py 
+	--retrieval_method jina-colbert-v2 \
+	--model_path jinaai/jina-colbert-v2 \
+	--corpus_path /path/to/your/images_corpus/images.parquet \ 
+	--save_dir /path/to/save/images_index \ 
+	--max_length 4096 \
+	--batch_size 128 \
+	--faiss_type Flat \
+	--index_modal text \
+	--save_embedding
+```
+
+```bash
+python index_builder.py 
+	--retrieval_method colqwen2-v1.0 \
+	--model_path vidore/colqwen2-v1.0 \
+	--corpus_path /path/to/your/images_corpus/images.parquet \ 
+	--save_dir /path/to/save/images_index \
+	--max_length 4096 \
+	--batch_size 128 \
+	--faiss_type Flat \
+	--index_modal image \
+	--save_embedding
+```
+
 *Note: Please replace `/path/to/your/...` with your actual file paths.*
 
 ## 🚀 Launch RL Training
@@ -71,14 +133,23 @@ First, launch the RAG environment server which handles the `<search>` and `<fetc
 
     ```bash
     python rag_serving/serving.py \
-        --config rag_serving/serving_config.yaml \
-        --num_retriever 4 \
+        --config rag_serving/serving_config_single-vec.yaml \
+        --num_retriever 8 \
+        --port 42354
+    ```
+
+    or 
+
+    ```bash
+    python rag_serving/serving.py \
+        --config rag_serving/serving_config_multi-vec.yaml \
+        --num_retriever 8 \
         --port 42354
     ```
 
 ### Step 2: RL Training
 
-Once the tool server is running, start the PPO/GRPO training. Ensure the server URL in the training script points to the IP obtained in Step 1.
+Once the tool server is running, start the training. Ensure the server URL in the training script points to the IP obtained in Step 1.
 
 ```bash
 bash examples/baselines/qwen2_5_vl_7b_doc_agent_ppo.sh
@@ -94,14 +165,11 @@ bash examples/baselines/qwen2_5_vl_7b_doc_agent_generation.sh
 
 ## 💾 Model Utils
 
-### Merge LoRA Adapters
-
-To merge the trained LoRA adapters with the base model into a standard Hugging Face format:
+### Merge Checkpoints in the Hugging Face Format
 
 ```bash
 python3 scripts/model_merger.py \
-    --local_dir checkpoints/easy_r1/exp_name/global_step_1/actor \
-    --output_dir checkpoints/merged_model
+    --local_dir checkpoints/easy_r1/exp_name/global_step_1/actor
 ```
 
 ## 📜 Citation

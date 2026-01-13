@@ -76,7 +76,8 @@ def load_col_model(model_path: str, model_name: str, device: str = 'cuda'):
             attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
         ).eval()
         processor = ColQwen2Processor.from_pretrained("vidore/colqwen2-v1.0")
-    elif model_path == "vidore/colqwen2-v1.0":
+        dim = model.dim
+    elif model_path == "vidore/colqwen2.5-v0.2":
         from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
         model = ColQwen2_5.from_pretrained(
             "vidore/colqwen2.5-v0.2",
@@ -85,6 +86,7 @@ def load_col_model(model_path: str, model_name: str, device: str = 'cuda'):
             attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
         ).eval()
         processor = ColQwen2_5_Processor.from_pretrained("vidore/colqwen2.5-v0.2")
+        dim = model.dim
     elif model_path == "vidore/colpali-v1.3":
         from colpali_engine.models import ColPali, ColPaliProcessor
         model = ColPali.from_pretrained(
@@ -93,13 +95,16 @@ def load_col_model(model_path: str, model_name: str, device: str = 'cuda'):
             device_map=device,  # or "mps" if on Apple Silicon
         ).eval()
         processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.3")
+        dim = model.dim
     elif "colbert" in model_name:
         from pylate import indexes, models, retrieve
         model = models.ColBERT(
             model_name_or_path=model_path,
+            trust_remote_code=True
         )
         processor = None
-    return model, processor
+        dim = model.get_sentence_embedding_dimension()
+    return model, processor, dim
 
 
 def pooling(pooler_output, last_hidden_state, attention_mask=None, pooling_method="mean"):

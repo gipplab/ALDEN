@@ -314,7 +314,7 @@ class Index_Builder:
                 use_fp16=self.use_fp16,
                 instruction=self.instruction,
             )
-            hidden_size = self.encoder.model.dim
+            hidden_size = self.encoder.dim
         else:
             from flashrag.retriever.encoder import Encoder
 

@@ -91,7 +91,7 @@ def get_retriever(config):
     else:
         try:
             model_config = AutoConfig.from_pretrained(config["retrieval_model_path"])
-            arch = model_config.architectures[0]
+            arch = model_config.architectures[0] if model_config.architectures is not None else ''
             if "clip" in arch.lower():
                 return getattr(importlib.import_module("flashrag.retriever"), "MultiModalRetriever")(config)
             else:
