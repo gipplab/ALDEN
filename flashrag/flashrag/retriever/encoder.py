@@ -118,7 +118,7 @@ class ColEncoder:
         self.use_fp16 = use_fp16
         self.instruction = instruction
         self.gpu_num = torch.cuda.device_count()
-        self.model, self.tokenizer = load_col_model(model_path, model_name, device)
+        self.model, self.tokenizer, self.dim = load_col_model(model_path, model_name, device)
 
     @torch.inference_mode()
     def encode(self, query_list, batch_size=64, is_query=False, modal=None) -> np.ndarray:

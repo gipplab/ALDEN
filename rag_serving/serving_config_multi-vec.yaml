@@ -1,0 +1,18 @@
+# ------------------------------------------------Environment Settings------------------------------------------------#
+gpu_id: "0,1,2,3"
+
+# -------------------------------------------------Retrieval Settings------------------------------------------------#
+# If set the name, the model path will be find in global paths
+retrieval_method: "colqwen2-v1.0"  # name or path of the retrieval model.
+retrieval_model_path: "vidore/colqwen2-v1.0"
+index_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_image_index_latest/train_val_new/emb_colqwen2-v1.0.memmap" # path to the indexed file
+faiss_gpu: False # whether use gpu to hold index
+corpus_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_hybrid_corpus_latest/train_val_new/images.parquet"  # path to corpus in '.jsonl' format that store the documents
+use_sentence_transformer: False
+ocr_use_sentence_transformer: False
+ocr_index_path: "/mnt/lustre-grete/usr/u15991/MDocAgent/tmp_text_index_latest/train_val_new/emb_jina-colbert-v2.memmap"
+ocr_retrieval_method: "jina-colbert-v2"  # name or path of the retrieval model.
+ocr_retrieval_model_path: "jinaai/jina-colbert-v2"
+
+
+
