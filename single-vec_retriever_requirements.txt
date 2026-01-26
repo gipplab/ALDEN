@@ -230,7 +230,7 @@ Pygments==2.19.1
 pylatexenc==2.10
 PyMySQL==1.1.2
 pyparsing @ file:///croot/pyparsing_1731445506121/work
-pypdf==5.6.0
+pypdf==6.6.2
 PyStemmer==2.2.0.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
