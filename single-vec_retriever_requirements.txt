@@ -214,7 +214,7 @@ prometheus_client==0.21.1
 prompt_toolkit==3.0.51
 propcache==0.3.1
 proto-plus==1.26.1
-protobuf==4.25.7
+protobuf==5.29.6
 psutil==7.0.0
 py-cpuinfo==9.0.0
 py-spy==0.4.0
