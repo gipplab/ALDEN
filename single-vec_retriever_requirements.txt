@@ -136,7 +136,7 @@ llguidance==0.7.19
 llvmlite==0.43.0
 lm-format-enforcer==0.10.11
 marisa-trie==1.2.1
-Markdown==3.8
+Markdown==3.8.1
 markdown-it-py==3.0.0
 markdown2==2.5.3
 MarkupSafe==2.1.5
