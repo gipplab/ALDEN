@@ -217,7 +217,7 @@ tomli==2.3.0
 torch==2.8.0+cu126
 torchaudio==2.8.0+cu126
 torchvision==0.23.0+cu126
-tornado==6.5.4
+tornado==6.5.5
 tqdm==4.67.1
 transformers==4.56.2
 triton==3.4.0

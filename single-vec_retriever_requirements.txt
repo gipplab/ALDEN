@@ -292,7 +292,7 @@ torch==2.6.0+cu124
 torchaudio==2.6.0+cu124
 torchdata==0.11.0
 torchvision==0.21.0+cu124
-tornado==6.4.2
+tornado==6.5.5
 tqdm==4.67.1
 transformers==4.49.0
 triton==3.2.0
