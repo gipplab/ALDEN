@@ -226,7 +226,7 @@ pydantic==2.11.3
 pydantic_core==2.33.1
 pydeck==0.9.1
 pydevd-pycharm==252.27397.106
-Pygments==2.19.1
+Pygments==2.20.0
 pylatexenc==2.10
 PyMySQL==1.1.2
 pyparsing @ file:///croot/pyparsing_1731445506121/work
