@@ -4,6 +4,8 @@
 
 This repository contains the official implementation of our paper: **[ALDEN: Reinforcement Learning for Active Navigation and Evidence Gathering in Long Documents.](https://arxiv.org/pdf/2510.25668)**.
 
+![example](./assets/arch.jpg)
+
 ## 🛠️ Installation
 
 ### Installing the Training Environment
