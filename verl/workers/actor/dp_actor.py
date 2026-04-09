@@ -254,7 +254,8 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
 
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
-        mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
+        mbs = 8
+        mini_batches = data.select(select_keys, non_tensor_select_keys).split(mbs)
 
         metrics = defaultdict(list)
         for _ in range(self.config.ppo_epochs):
@@ -262,10 +263,12 @@ class DataParallelPPOActor(BasePPOActor, ImageProcessMixin):
             #     mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
 
             for mini_batch in mini_batches:
-                gradient_accumulation = (
-                    self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update
-                )
-                micro_batches = mini_batch.split(self.config.micro_batch_size_per_device_for_update)
+                micro_bsz = self.config.micro_batch_size_per_device_for_update
+                mini_bsz = mini_batch.batch.batch_size[0]
+                assert mini_bsz % micro_bsz == 0, f"mini-batch({mini_bsz}) must be divisible by micro-batch({micro_bsz})"
+                gradient_accumulation = mini_bsz // micro_bsz
+                micro_batches = mini_batch.split(micro_bsz)
+                self.actor_optimizer.zero_grad(set_to_none=True)
                 # if self.rank == 0:
                 #     micro_batches = tqdm(micro_batches, desc="Update policy", position=3)
 

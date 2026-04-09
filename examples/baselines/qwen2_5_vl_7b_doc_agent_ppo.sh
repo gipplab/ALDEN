@@ -17,19 +17,18 @@
 
 set -x
 #export VLLM_ATTENTION_BACKEND=XFORMERS
-
 MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct  # replace it with your local file path
-WANDB_API_KEY=***REMOVED_WANDB_API_KEY***
+WANDB_API_KEY=YOUR_KEY
 ROLLOUT_NAME=vllm_agent
 SEARCH_TOP_N=5
-SEARCH_URL=http://10.241.148.50:42354
+SEARCH_URL=http://YOUR_RETRIEVER_IP:YOUR_RETRIEVER_PORT
 LIMIT_IMAGES=15
-MAX_RESPONSE_LENGTH=18000
+MAX_RESPONSE_LENGTH=18500
 MAX_PROMPT_LENGTH=2500
-ROLLOUT_MAX_NUM_BATCHED_TOKENS=21500
+ROLLOUT_MAX_NUM_BATCHED_TOKENS=22500
 TENSOR_PARALLEL_SIZE=1
 PROJECT_NAME=EasyR1
-EXPERIMENT_NAME=base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue
+EXPERIMENT_NAME=base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_final_mp-longer_kl1e-3_full_mnb_obs-1e-2
 PROMPT_KEY=question
 ROLLOUT_BATCH_SIZE=128
 ROLLOUT_N=1
@@ -37,13 +36,13 @@ VAL_BATCH_SIZE=128
 GLOBAL_BATCH_SIZE=128
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_UPDATE=1
 MICRO_BATCH_SIZE_PER_DEVICE_FOR_EXPERIENCE=16
-MAX_PIXELS=862400
+MAX_PIXELS=901600
 MIN_PIXELS=261070
 MAX_TURN_NUM=6
-TRAIN_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/latest/train.parquet  # your train data path here
-DEV_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/Doc_Agent/latest/val_1024.parquet
-CONFIG_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/examples/config_ppo.yaml
-SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/base_alden
+TRAIN_DATA_PATH=YOUR_ROOT/ALDEN/dataset/train/train.parquet  # your train data path here
+DEV_DATA_PATH=YOUR_ROOT/ALDEN/dataset/train/val.parquet
+CONFIG_PATH=YOUR_ROOT/ALDEN/examples/config_ppo.yaml
+SAVE_PATH=YOUR_ROOT/ALDEN/checkpoints/base_alden
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY
@@ -78,7 +77,7 @@ echo "IP Head: $ip_head"
 
 echo "StartingHEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" /bin/bash -c \
-       "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1 \
+       "source YOUR_USER_PATH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1 \
         && ray start --head --node-ip-address="$head_node_ip" --port=$port \
          --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --include-dashboard true --dashboard-host 0.0.0.0 --dashboard-port 8265 --block" &
 # optional, though may be useful in certain versions of Ray < 1.0.
@@ -92,14 +91,14 @@ for ((i = 1; i <= worker_num; i++)); do
     node_i=${nodes_array[$i]}
     echo "Starting WORKER $i at $node_i"
     srun --nodes=1 --ntasks=1 -w "$node_i" /bin/bash -c \
-      "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1  \
+      "source YOUR_USER_PATH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1  \
       && ray start --address "$ip_head" --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --block" &
     sleep 5
 done
 
 
 srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
-  "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1  \
+  "source YOUR_USER_APTH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1  \
   && python -m verl.trainer.main \
     config=${CONFIG_PATH} \
     data.train_files=${TRAIN_DATA_PATH} \
@@ -133,6 +132,3 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
     trainer.experiment_name=${EXPERIMENT_NAME} \
     trainer.n_gpus_per_node=${SLURM_GPUS_PER_NODE} \
     trainer.nnodes=${SLURM_NNODES}"
-#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/EasyR1/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite/global_step_239"
-#    trainer.save_checkpoint_path=${SAVE_PATH}
-#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent/global_step_160"

@@ -40,7 +40,7 @@ pip install -e .
 
 ### 1. Corpus Building
 
-We provide the processed training corpus on Hugging Face: **[SkyFishQ/ALDEN](https://www.google.com/search?q=https://huggingface.co/SkyFishQ/ALDEN)**.
+We provide the processed training corpus on Hugging Face: **[SkyFishQ/ALDEN](https://huggingface.co/datasets/SkyFishQ/ALDEN/tree/main)**.
 
 If you wish to build the corpus from scratch using your own data:
 
@@ -147,6 +147,8 @@ First, launch the RAG environment server which handles the `<search>` and `<fetc
         --port 42354
     ```
 
+    *We initially set two retrievers for each GPU. Adapt the number of GPU and retriever according to the specific devices in the yaml file.*
+
 ### Step 2: RL Training
 
 Once the tool server is running, start the training. Ensure the server URL in the training script points to the IP obtained in Step 1.
@@ -168,7 +170,7 @@ bash examples/baselines/qwen2_5_vl_7b_doc_agent_generation.sh
 ### Merge Checkpoints in the Hugging Face Format
 
 ```bash
-python3 scripts/model_merger.py \
+python scripts/model_merger.py \
     --local_dir checkpoints/easy_r1/exp_name/global_step_1/actor
 ```
 

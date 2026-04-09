@@ -32,7 +32,7 @@ class RewardConfig:
     lambda_action_repetition_penalty: float = 1.5
     recall_ocr: bool = False
     mm_fetch: bool = False
-    search_query_repetition_penalty: bool = False
+    search_query_repetition_penalty: bool = True
     usage_top_n: int = 1
     """auto keys"""
     score_function_name: Optional[str] = field(default=None, init=False)

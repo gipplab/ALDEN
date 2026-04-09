@@ -3,6 +3,7 @@
   <component name="SshConfigs">
     <configs>
       <sshConfig host="glogin-gpu.hpc.gwdg.de" id="707ae71d-aaf6-4acd-b3c2-5d918269f7a8" keyPath="$USER_HOME$/.ssh/gwdg" port="22" nameFormat="DESCRIPTIVE" username="u13688" useOpenSSHConfig="true" />
+      <sshConfig host="glogin-gpu.hpc.gwdg.de" id="cf891a89-5632-4eec-ac41-01fc5c61c027" keyPath="$USER_HOME$/.ssh/gwdg" port="22" nameFormat="DESCRIPTIVE" username="u14705" useOpenSSHConfig="true" />
     </configs>
   </component>
 </project>

@@ -471,6 +471,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
 
             # collect the gotten page image
             result_image_list = [{'data': []} for _ in range(len(curr_inputs))]
+            m = self.processor.image_processor.merge_size
 
             # generate until all inputs are finished
             turn_idx = 0
@@ -583,25 +584,21 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         ocr_mask_list[idx] += [1] * len(self.result_prefix_ids)
                         page_numbers_list[idx]['N.O'][turn_idx].extend(p_id)
                         while top_ki < self.usage_top_n:
-                            if len(result_mask_list[idx]) + (image_inputs['image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
+                            t, h, w = image_inputs["image_grid_thw"][top_ki].tolist()
+                            num_img_tokens = int(t) * (int(h) // m) * (int(w) // m)
+                            pstr = self.tokenizer.encode("{}-th page: ".format(str(int(p_id[top_ki]) + 1)))
+                            if len(result_mask_list[idx]) + num_img_tokens + 2 + len(pstr) < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
                                 result_image_list[idx]['data'].append(result_str[top_ki])
-                                pstr = self.tokenizer.encode("{}-th page: ".format(str(int(p_id[top_ki]) + 1)))
                                 if 'multi_modal_data' not in curr_inputs[idx].keys():
                                     curr_inputs[idx]['multi_modal_data'] = {'image': []}
                                 curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[top_ki])
                                 curr_inputs[idx]['prompt_token_ids'].extend(pstr + [self.image_start_id, self.image_token_id, self.image_end_id])
-                                result_mask_list[idx] += [0] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2 + [0] * len(pstr)
-                                query_mask_list[idx] += [0] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2 + [0] * len(pstr)
-                                ocr_mask_list[idx] += [1] * len(pstr) + [0] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [0] * 2
-                                turn_sequence_mask[idx] += [-1] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [-1] * 2 + [-1] * len(pstr)
-                                result_attention_mask[idx] += [1] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [1] * 2 + [1] * len(pstr)
-                                result_ids_list[idx] += pstr + [self.image_start_id] + [self.image_token_id] * (image_inputs[
-                                                                    'image_grid_thw'][top_ki].prod() // self.processor.image_processor.merge_size**2) + [self.image_end_id]
+                                result_mask_list[idx] += [0] * num_img_tokens + [0] * 2 + [0] * len(pstr)
+                                query_mask_list[idx] += [0] * num_img_tokens + [0] * 2 + [0] * len(pstr)
+                                ocr_mask_list[idx] += [1] * len(pstr) + [0] * num_img_tokens + [0] * 2
+                                turn_sequence_mask[idx] += [-1] * num_img_tokens + [-1] * 2 + [-1] * len(pstr)
+                                result_attention_mask[idx] += [1] * num_img_tokens + [1] * 2 + [1] * len(pstr)
+                                result_ids_list[idx] += pstr + [self.image_start_id] + [self.image_token_id] * num_img_tokens + [self.image_end_id]
                             else:
                                 almost_full_indices.append(idx)
                                 break
@@ -661,25 +658,21 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                             if modal == 'image':
                                 processed_result = [self.process_image(image) for image in result]
                                 image_inputs = self.processor.image_processor(processed_result, return_tensors='pt')
-                                if len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
+                                t, h, w = image_inputs["image_grid_thw"][0].tolist()
+                                num_img_tokens = int(t) * (int(h) // m) * (int(w) // m)
+                                if len(result_ids_list[idx]) + num_img_tokens + len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2 < self.config.response_length and len(result_image_list[idx]['data']) < self.vllm_image_limit:
                                     result_image_list[idx]['data'].append(result_str[0])
                                     page_numbers_list[idx]['N.O'][turn_idx].append(p_id_s)
                                     if 'multi_modal_data' not in curr_inputs[idx].keys():
                                         curr_inputs[idx]['multi_modal_data'] = {'image': []}
                                     curr_inputs[idx]['multi_modal_data']['image'].append(processed_result[0])
                                     curr_inputs[idx]['prompt_token_ids'].extend(self.result_prefix_ids + [self.image_start_id, self.image_token_id, self.image_end_id] + self.result_suffix_ids)
-                                    result_mask_list[idx] += [0] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
-                                    query_mask_list[idx] += [0] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
-                                    ocr_mask_list[idx] += [1] * len(self.result_prefix_ids) + [0] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [0] * 2 + [1] * len(self.result_suffix_ids)
-                                    turn_sequence_mask[idx] += [-1] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [-1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
-                                    result_attention_mask[idx] += [1] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
-                                    result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [self.image_token_id] * (image_inputs[
-                                                                        'image_grid_thw'][0].prod() // self.processor.image_processor.merge_size ** 2) + [self.image_end_id] + self.result_suffix_ids
+                                    result_mask_list[idx] += [0] * num_img_tokens + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
+                                    query_mask_list[idx] += [0] * num_img_tokens + [0] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
+                                    ocr_mask_list[idx] += [1] * len(self.result_prefix_ids) + [0] * num_img_tokens + [0] * 2 + [1] * len(self.result_suffix_ids)
+                                    turn_sequence_mask[idx] += [-1] * num_img_tokens + [-1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
+                                    result_attention_mask[idx] += [1] * num_img_tokens + [1] * (len(self.result_prefix_ids) + len(self.result_suffix_ids) + 2)
+                                    result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [self.image_token_id] * num_img_tokens + [self.image_end_id] + self.result_suffix_ids
                                 else:
                                     almost_full_indices.append(idx)
                             else:
@@ -741,8 +734,9 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                 for idx, result, p_id, result_str in zip(padding_indices, padding_results, padding_page_ids, padding_results_str):
                     processed_result = [self.process_image(image) for image in result]
                     image_inputs = self.processor.image_processor(processed_result, return_tensors='pt')
-                    padding_img_len = len(result_ids_list[idx]) + (image_inputs['image_grid_thw'][
-                                                                       0].prod() // self.processor.image_processor.merge_size ** 2) + len(
+                    t, h, w = image_inputs["image_grid_thw"][0].tolist()
+                    num_img_tokens = int(t) * (int(h) // m) * (int(w) // m)
+                    padding_img_len = len(result_ids_list[idx]) + num_img_tokens + len(
                         self.result_prefix_ids) + len(self.result_suffix_ids) + 2
                     result_image_list[idx]['data'].append(result_str[0])
                     page_numbers_list[idx]['N.O'][-1].append(p_id[0])
@@ -758,36 +752,23 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
                         result_attention_mask[idx] = result_attention_mask[idx][:t]
                         turn_sequence_mask[idx] = turn_sequence_mask[idx][:t]
                         result_ids_list[idx] = result_ids_list[idx][:t]
-                    result_mask_list[idx] += [0] * (image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                    result_mask_list[idx] += [0] * num_img_tokens + [
                                                  0] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
-                    query_mask_list[idx] += [0] * (image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                    query_mask_list[idx] += [0] * num_img_tokens + [
                                                  0] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
-                    ocr_mask_list[idx] += [1] * (image_inputs[
-                                                       'image_grid_thw'][
-                                                       0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                    ocr_mask_list[idx] += [1] * num_img_tokens + [
                                                 1] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
-                    turn_sequence_mask[idx] += [-1] * (image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                    turn_sequence_mask[idx] += [-1] * num_img_tokens + [
                                                  -1] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
-                    result_attention_mask[idx] += [1] * (image_inputs[
-                                                             'image_grid_thw'][
-                                                             0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                    result_attention_mask[idx] += [1] * num_img_tokens + [
                                                       1] * (len(self.result_prefix_ids) + len(
                         self.result_suffix_ids) + 2)
                     result_ids_list[idx] += self.result_prefix_ids + [self.image_start_id] + [
-                        self.image_token_id] * (
-                                                    image_inputs[
-                                                        'image_grid_thw'][
-                                                        0].prod() // self.processor.image_processor.merge_size ** 2) + [
+                        self.image_token_id] * num_img_tokens + [
                                                 self.image_end_id] + self.result_suffix_ids
 
             response_ids = VF.pad_2d_list_to_length(
@@ -841,7 +822,7 @@ class vLLMRolloutAgent(vLLMRollout, ImageProcessMixin):
             else:
                 delta_pid = get_rope_index(
                     self.processor,
-                    input_ids=response_ids[i, :].unsqueeze(0),
+                    input_ids=response_ids[i, :],
                     image_grid_thw=None,
                 )
             delta_position_id.append(delta_pid.unsqueeze(0))

@@ -17,28 +17,28 @@
 set -x
 #export VLLM_ATTENTION_BACKEND=XFORMERS
 
-MODEL_PATH=checkpoints/EasyR1/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue/global_step_479/actor/huggingface  # replace it with your local file path
-WANDB_API_KEY=***REMOVED_WANDB_API_KEY***
+MODEL_PATH=./checkpoints/YOUR_CKPT_NAME/global_step_479/actor/huggingface  # replace it with your local file path
+WANDB_API_KEY=YOUR_KEY
 ROLLOUT_NAME=vllm_agent
 SEARCH_TOP_N=5
-SEARCH_URL=http://10.241.148.9:42354
+SEARCH_URL=http://YOUR_RETRIEVER_IP:YOUR_RETRIEVER_PORT
 LIMIT_IMAGES=15
-MAX_RESPONSE_LENGTH=18000
+MAX_RESPONSE_LENGTH=18500
 MAX_PROMPT_LENGTH=2500
-ROLLOUT_MAX_NUM_BATCHED_TOKENS=21500
+ROLLOUT_MAX_NUM_BATCHED_TOKENS=22500
 TENSOR_PARALLEL_SIZE=1
 PROMPT_KEY=question
 ROLLOUT_BATCH_SIZE=128
 ROLLOUT_N=1
 VAL_BATCH_SIZE=-1
 TEMPERATURE=0.2
-MAX_PIXELS=862400
+MAX_PIXELS=940800
 MIN_PIXELS=261070
 MAX_TURN_NUM=6
-TEST_DATA_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/dataset/test/ldu.parquet
+TEST_DATA_PATH=YOUR_ROOT/dataset/test/mmlb.parquet
 
-CONFIG_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/examples/generation_config.yaml
-SAVE_PATH=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/generation_results/base_alden_no-ndcg-diff_new-reward-search-acs-set_top-3_no-rewrite_continue_479_new_top1
+CONFIG_PATH=YOUR_ROOT/ALDEN/examples/generation_config.yaml
+SAVE_PATH=YOUR_SAVE_PATH
 
 if [ "$WANDB_API_KEY" != "None" ]; then
     wandb login --relogin $WANDB_API_KEY
@@ -73,7 +73,7 @@ echo "IP Head: $ip_head"
 
 echo "StartingHEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" /bin/bash -c \
-       "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1 \
+       "source YOUR_USER_PATH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1 \
         && ray start --head --node-ip-address="$head_node_ip" --port=$port \
          --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --include-dashboard true --dashboard-host 0.0.0.0 --dashboard-port 8265 --block" &
 # optional, though may be useful in certain versions of Ray < 1.0.
@@ -87,14 +87,14 @@ for ((i = 1; i <= worker_num; i++)); do
     node_i=${nodes_array[$i]}
     echo "Starting WORKER $i at $node_i"
     srun --nodes=1 --ntasks=1 -w "$node_i" /bin/bash -c \
-      "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1  \
+      "source YOUR_USER_PATH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1  \
       && ray start --address "$ip_head" --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --block" &
     sleep 5
 done
 
 
 srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
-  "source /user/yang28/u14705/.bashrc && source /mnt/vast-kisski/projects/kisski-sub-doc-understanding/miniconda3/bin/activate EasyR1  \
+  "source YOUR_USER_PATH/.bashrc && source YOUR_ROOT/miniconda3/bin/activate EasyR1  \
   && python -m verl.trainer.main_generation \
     config=${CONFIG_PATH} \
     data.test_files=${TEST_DATA_PATH} \
@@ -119,4 +119,3 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node"  /bin/bash -c \
     trainer.n_gpus_per_node=${SLURM_GPUS_PER_NODE} \
     trainer.nnodes=${SLURM_NNODES} \
     trainer.save_checkpoint_path=${SAVE_PATH}"
-#    trainer.load_checkpoint_path=/mnt/vast-kisski/projects/kisski-sub-doc-understanding/EasyR1/checkpoints/qwen2_5_vl_7b_doc_agent/global_step_160"

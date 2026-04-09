@@ -9,6 +9,13 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="606d6126-c85f-4819-ba15-9041b3e13fc7" name="KISSKI">
+        <fileTransfer accessType="SFTP" host="glogin-gpu.hpc.gwdg.de" port="22" sshConfigId="cf891a89-5632-4eec-ac41-01fc5c61c027" sshConfig="u14705@glogin-gpu.hpc.gwdg.de:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>

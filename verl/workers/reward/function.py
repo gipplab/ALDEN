@@ -168,7 +168,7 @@ class FunctionRewardManager:
                                         current_query_tokens=query_tokens,
                                         prior_queries_tokens=all_queries,
                                         n=3,
-                                        alpha=0.3,  # start small; warm up later
+                                        alpha=0.02,  # start small; warm up later
                                         mode="max",  # or "max" (stricter) / "avg"
                                         fallback_n_if_short=True,
                                     )

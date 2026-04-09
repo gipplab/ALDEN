@@ -178,3 +178,12 @@ wandb/
 dataset/
 generation_results/
 backups/
+
+examples/baselines/qwen2_5_vl_3b_clevr.sh
+examples/baselines/qwen2_5_vl_3b_geoqa8k.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent_generation_SCC.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent_NHR.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent_ppo_NHR.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent_ppo_SCC.sh
+examples/baselines/qwen2_5_vl_7b_doc_agent_SCC.sh
